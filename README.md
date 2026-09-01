@@ -46,8 +46,8 @@ docker compose up -d
 
 | Tag | Branch | Audience |
 |---|---|---|
-| `ghcr.io/cedar2025/xboard:latest` | `master` | Production users — only stable releases land here |
-| `ghcr.io/cedar2025/xboard:new-dev` | `new-dev` | Early adopters / testing — newest features, may be unstable |
+| `ghcr.io/shigalin/xboard:latest` | `master` | Production users — only stable releases land here |
+| `ghcr.io/shigalin/xboard:new-dev` | `new-dev` | Early adopters / testing — newest features, may be unstable |
 
 All development happens on `new-dev`; once verified it is fast-forwarded into `master`, which automatically publishes `:latest`.
 
