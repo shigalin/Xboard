@@ -68,6 +68,7 @@ class NodeWorker
     public function onWorkerStart(Worker $worker): void
     {
         Log::info("[WS] Worker started, pid={$worker->id}");
+        app(DeviceStateService::class)->completeIndexMigration();
         $this->subscribeRedis();
         $this->setupTimers();
     }
@@ -107,16 +108,21 @@ class NodeWorker
 
         Timer::add(10, function () {
             $pendingNodeIds = Redis::spop('device:push_pending_nodes', 100);
-            if (empty($pendingNodeIds)) {
-                return;
-            }
-
             $service = app(DeviceStateService::class);
-            foreach ($pendingNodeIds as $nodeId) {
-                $nodeId = (int) $nodeId;
-                if (NodeRegistry::get($nodeId) !== null) {
-                    NodeEventHandlers::pushDeviceStateToNode($nodeId, $service);
+            if (!empty($pendingNodeIds)) {
+                foreach ($pendingNodeIds as $nodeId) {
+                    $nodeId = (int) $nodeId;
+                    if (NodeRegistry::get($nodeId) !== null) {
+                        NodeEventHandlers::pushDeviceStateToNode($nodeId, $service);
+                    }
                 }
+            }
+            try {
+                $service->flushPendingUpdates(100);
+            } catch (\Throwable $e) {
+                Log::error('[WS] Failed to flush device DB updates', [
+                    'error' => $e->getMessage(),
+                ]);
             }
         });
     }
@@ -186,7 +192,10 @@ class NodeWorker
         NodeRegistry::add($nodeId, $conn);
         Cache::put("node_ws_alive:{$nodeId}", true, 86400);
 
-        app(DeviceStateService::class)->clearAllNodeDevices($nodeId);
+        $deviceService = app(DeviceStateService::class);
+        $connectionSequence = $deviceService->getNodeSequence($nodeId);
+        $deviceService->clearAllNodeDevices($nodeId, $connectionSequence);
+        $conn->deviceSequences = [$nodeId => $connectionSequence];
 
         Log::debug("[WS] Node#{$nodeId} connected", [
             'remote' => $conn->getRemoteIp(),
@@ -228,17 +237,21 @@ class NodeWorker
 
         // 把同一个连接注册到该机器下所有节点
         $nodeIds = [];
+        $deviceSequences = [];
         $deviceService = app(DeviceStateService::class);
         foreach ($nodes as $node) {
             NodeRegistry::add($node->id, $conn);
             Cache::put("node_ws_alive:{$node->id}", true, 86400);
-            $deviceService->clearAllNodeDevices($node->id);
+            $connectionSequence = $deviceService->getNodeSequence($node->id);
+            $deviceService->clearAllNodeDevices($node->id, $connectionSequence);
             $nodeIds[] = $node->id;
+            $deviceSequences[$node->id] = $connectionSequence;
         }
 
         // 连接上记录所属机器和节点列表
         $conn->machineId = $machineId;
         $conn->machineNodeIds = $nodeIds;
+        $conn->deviceSequences = $deviceSequences;
 
         Log::debug("[WS] Machine#{$machineId} connected, nodes: " . implode(',', $nodeIds), [
             'remote' => $conn->getRemoteIp(),
@@ -308,10 +321,8 @@ class NodeWorker
                 NodeRegistry::remove($nodeId, $conn);
                 Cache::forget("node_ws_alive:{$nodeId}");
 
-                $affectedUserIds = $service->clearAllNodeDevices($nodeId);
-                foreach ($affectedUserIds as $userId) {
-                    $service->notifyUpdate($userId);
-                }
+                $connectionSequence = (int) (($conn->deviceSequences ?? [])[$nodeId] ?? 0);
+                $service->clearAllNodeDevices($nodeId, $connectionSequence);
             }
 
             if (!empty($conn->machineId)) {
@@ -332,10 +343,8 @@ class NodeWorker
             NodeRegistry::remove($nodeId, $conn);
             Cache::forget("node_ws_alive:{$nodeId}");
 
-            $affectedUserIds = $service->clearAllNodeDevices($nodeId);
-            foreach ($affectedUserIds as $userId) {
-                $service->notifyUpdate($userId);
-            }
+            $connectionSequence = (int) (($conn->deviceSequences ?? [])[$nodeId] ?? 0);
+            $affectedUserIds = $service->clearAllNodeDevices($nodeId, $connectionSequence);
 
             Log::debug("[WS] Node#{$nodeId} disconnected", [
                 'total' => NodeRegistry::count(),

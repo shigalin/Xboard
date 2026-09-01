@@ -45,8 +45,34 @@ class NodeEventHandlers
     {
         $service = app(DeviceStateService::class);
 
+        $sequence = (int) ($data['device_sequence'] ?? 0);
+
         if (isset($data['devices']) && is_array($data['devices'])) {
             $data = $data['devices'];
+        }
+
+        if ($sequence > 0) {
+            $affectedUserIds = $service->syncNodeDevices($nodeId, $data, $sequence, true);
+            if ($affectedUserIds === null) {
+                Log::debug("[WS] Node#{$nodeId} ignored stale device sequence {$sequence}");
+                return;
+            }
+
+            $deviceSequences = $conn->deviceSequences ?? [];
+            $deviceSequences[$nodeId] = $sequence;
+            $conn->deviceSequences = $deviceSequences;
+
+            Redis::sadd('device:push_pending_nodes', $nodeId);
+            Log::debug("[WS] Node#{$nodeId} applied device sequence {$sequence}", [
+                'reported_users' => count($data),
+                'affected_users' => count($affectedUserIds),
+            ]);
+            return;
+        }
+
+        if ($service->hasNodeSequence($nodeId)) {
+            Log::debug("[WS] Node#{$nodeId} ignored unsequenced device report");
+            return;
         }
 
         // Get old data

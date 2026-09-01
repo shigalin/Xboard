@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\V2\Server;
 
 use App\Http\Controllers\Controller;
+use App\Services\DeviceStateService;
 use App\Services\ServerService;
 use App\WebSocket\NodeWorker;
 use Illuminate\Http\Request;
@@ -34,9 +35,16 @@ class ServerController extends Controller
             ];
         }
 
-        return response()->json([
-            'websocket' => $websocket
-        ]);
+        $response = ['websocket' => $websocket];
+        if ($request->boolean('device_sequence_v1')) {
+            $node = $request->attributes->get('node_info');
+            if ($node && isset($node->id)) {
+                $response['device_sequence_base'] = app(DeviceStateService::class)
+                    ->reserveNodeSequence((int) $node->id);
+            }
+        }
+
+        return response()->json($response);
     }
 
     /**
@@ -54,8 +62,13 @@ class ServerController extends Controller
         }
 
         $alive = $request->input('alive');
-        if (is_array($alive) && !empty($alive)) {
-            ServerService::processAlive($node->id, $alive);
+        if (is_array($alive)) {
+            ServerService::processAlive(
+                $node->id,
+                $alive,
+                (int) $request->input('device_sequence', 0),
+                $request->boolean('device_full_snapshot')
+            );
         }
 
         $online = $request->input('online');

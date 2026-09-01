@@ -144,9 +144,26 @@ class ServerService
     /**
      * 处理节点在线设备汇报
      */
-    public static function processAlive(int $nodeId, array $alive): void
+    public static function processAlive(
+        int $nodeId,
+        array $alive,
+        int $sequence = 0,
+        bool $fullSnapshot = false
+    ): void
     {
         $service = app(DeviceStateService::class);
+        if ($sequence > 0) {
+            $affectedUserIds = $service->syncNodeDevices($nodeId, $alive, $sequence, $fullSnapshot);
+            if ($affectedUserIds === null) {
+                return;
+            }
+            return;
+        }
+
+        if ($service->hasNodeSequence($nodeId)) {
+            return;
+        }
+
         foreach ($alive as $uid => $ips) {
             $service->setDevices((int) $uid, $nodeId, (array) $ips);
         }

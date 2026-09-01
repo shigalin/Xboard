@@ -80,6 +80,19 @@ class UniProxyController extends Controller
         return response()->json(['alive' => (object) $alive]);
     }
 
+    public function devices(Request $request): JsonResponse
+    {
+        $node = $this->getNodeInfo($request);
+        $userIds = ServerService::getAvailableUsers($node)
+            ->where('device_limit', '>', 0)
+            ->pluck('id')
+            ->all();
+
+        return response()->json([
+            'users' => (object) $this->deviceStateService->getUsersDevices($userIds),
+        ]);
+    }
+
     public function alive(Request $request): JsonResponse
     {
         $node = $this->getNodeInfo($request);
