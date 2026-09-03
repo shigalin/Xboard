@@ -52,37 +52,62 @@ class NodeSyncService
     }
 
     /**
-     * Push user changes (add/remove) to affected nodes
+     * Push user changes (add/remove) to affected nodes.
+     *
+     * Runs under a per-user lock and re-reads the user inside it, so every
+     * publisher (observer job, expiry scan, ...) decides add/remove from the
+     * same fresh state and publishes in lock order. Without this, a renewal
+     * `add` and a stale `remove` could reach the node out of order.
+     *
+     * Returns false if any publish failed or the lock could not be acquired.
+     *
+     * @throws \Illuminate\Contracts\Cache\LockTimeoutException
      */
-    public static function notifyUserChanged(User $user): void
+    public static function notifyUserChanged(User $user): bool
     {
-        if (!$user->group_id)
-            return;
+        return self::withUserLock($user->id, function () use ($user) {
+            $user = User::find($user->id);
+            if (!$user || !$user->group_id)
+                return true;
 
-        $servers = Server::whereJsonContains('group_ids', (string) $user->group_id)->get();
-        foreach ($servers as $server) {
-            if (!self::isNodeOnline($server->id))
-                continue;
+            $allPushed = true;
+            $servers = Server::whereJsonContains('group_ids', (string) $user->group_id)->get();
+            foreach ($servers as $server) {
+                if (!self::isNodeOnline($server->id))
+                    continue;
 
-            if ($user->isAvailable()) {
-                self::push($server->id, 'sync.user.delta', [
-                    'action' => 'add',
-                    'users' => [
-                        [
-                            'id' => $user->id,
-                            'uuid' => $user->uuid,
-                            'speed_limit' => $user->speed_limit,
-                            'device_limit' => $user->device_limit,
-                        ]
-                    ],
-                ]);
-            } else {
-                self::push($server->id, 'sync.user.delta', [
-                    'action' => 'remove',
-                    'users' => [['id' => $user->id]],
-                ]);
+                if ($user->isAvailable()) {
+                    $ok = self::push($server->id, 'sync.user.delta', [
+                        'action' => 'add',
+                        'users' => [
+                            [
+                                'id' => $user->id,
+                                'uuid' => $user->uuid,
+                                'speed_limit' => $user->speed_limit,
+                                'device_limit' => $user->device_limit,
+                            ]
+                        ],
+                    ]);
+                } else {
+                    $ok = self::push($server->id, 'sync.user.delta', [
+                        'action' => 'remove',
+                        'users' => [['id' => $user->id]],
+                    ]);
+                }
+                $allPushed = $allPushed && $ok;
             }
-        }
+            return $allPushed;
+        });
+    }
+
+    /**
+     * Serialize per-user sync publishes across processes.
+     *
+     * @throws \Illuminate\Contracts\Cache\LockTimeoutException
+     */
+    public static function withUserLock(int $userId, callable $callback): mixed
+    {
+        return Cache::lock("node_sync:user:{$userId}", 10)->block(5, $callback);
     }
 
     /**
@@ -146,16 +171,27 @@ class NodeSyncService
 
     /**
      * Publish a push command to Redis — picked up by the Workerman WS server.
-     * Returns false if the publish failed so callers can decide whether to retry.
+     *
+     * PUBLISH returns the number of subscribers that received the message;
+     * zero means the WS server is not listening, so the node cannot have
+     * received it. Returns false in that case (and on exceptions) so callers
+     * can decide whether to retry.
      */
     public static function push(int $nodeId, string $event, array $data): bool
     {
         try {
-            Redis::publish('node:push', json_encode([
+            $received = (int) Redis::publish('node:push', json_encode([
                 'node_id' => $nodeId,
                 'event' => $event,
                 'data' => $data,
             ]));
+            if ($received <= 0) {
+                Log::warning("[NodePush] No subscriber received message, WS server may be down", [
+                    'node_id' => $nodeId,
+                    'event' => $event,
+                ]);
+                return false;
+            }
             return true;
         } catch (\Throwable $e) {
             Log::warning("[NodePush] Redis publish failed: {$e->getMessage()}", [

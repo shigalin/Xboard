@@ -2,11 +2,13 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Server;
 use App\Models\User;
 use App\Services\NodeSyncService;
+use App\WebSocket\NodeWorker;
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class CheckExpiredUsers extends Command
 {
@@ -21,61 +23,63 @@ class CheckExpiredUsers extends Command
     public function handle()
     {
         $now = time();
-        $since = (int) Cache::get(self::LAST_CHECKED_AT_KEY, $now - self::DEFAULT_LOOKBACK);
+
+        // 先固定起点再扫描：否则首轮推送失败时，下一轮会按 now-LOOKBACK
+        // 重新计算，窗口前移，边缘的失败用户会被漏掉。
+        $since = Cache::get(self::LAST_CHECKED_AT_KEY);
+        if ($since === null) {
+            $since = $now - self::DEFAULT_LOOKBACK;
+            Cache::forever(self::LAST_CHECKED_AT_KEY, $since);
+        }
+        $since = (int) $since;
 
         // 到期不会改变任何数据库字段，UserObserver 不会触发同步，
-        // 因此需要主动扫描 (since, now] 区间内到期的用户并推送 remove。
-        $candidates = User::toBase()
+        // 因此需要主动扫描 (since, now] 区间内到期的用户。
+        $candidateIds = User::toBase()
             ->whereNotNull('expired_at')
             ->where('expired_at', '>', $since)
             ->where('expired_at', '<=', $now)
             ->whereNotNull('group_id')
-            ->select(['id', 'group_id'])
-            ->get();
+            ->pluck('id')
+            ->all();
 
-        if ($candidates->isEmpty()) {
+        if (empty($candidateIds)) {
             Cache::forever(self::LAST_CHECKED_AT_KEY, $now);
             return;
         }
 
-        // 先把节点查完，再在推送前用最新状态复核名单：
-        // 若用户在扫描后完成续费，expired_at 已是未来时间，会在此被过滤掉，
-        // 避免旧快照覆盖续费产生的 add 通知。
-        $onlineServersByGroup = $this->resolveOnlineServersByGroup(
-            $candidates->pluck('group_id')->unique()->all()
-        );
+        // WS 服务未运行时任何推送都不会有接收者；保留进度等其恢复后补发，
+        // 节点重连时也会收到全量同步。
+        if (!Cache::has(NodeWorker::HEARTBEAT_CACHE_KEY)) {
+            $this->warn("WS server heartbeat missing, keeping checkpoint at {$since}.");
+            return;
+        }
 
-        $expiredUsers = User::toBase()
-            ->whereIn('id', $candidates->pluck('id')->all())
-            ->where('expired_at', '<=', time())
-            ->whereNotNull('group_id')
-            ->select(['id', 'group_id'])
-            ->get();
-
+        // 与续费路径共用 notifyUserChanged：在按用户加锁后重新读取状态再决定
+        // add/remove 并发布，保证同一用户的资格判断与消息顺序一致。
+        // 已续费的用户在锁内会被判定为可用，只会发出幂等的 add。
         $allPushed = true;
-        $notifiedCount = 0;
+        $notified = 0;
 
-        foreach ($expiredUsers->groupBy('group_id') as $groupId => $users) {
-            $servers = $onlineServersByGroup[$groupId] ?? [];
-            if (empty($servers)) {
+        foreach ($candidateIds as $userId) {
+            $user = User::find($userId);
+            if (!$user) {
                 continue;
             }
 
-            $payload = [
-                'action' => 'remove',
-                'users' => $users->map(fn($u) => ['id' => $u->id])->values()->all(),
-            ];
-
-            foreach ($servers as $serverId) {
-                if (NodeSyncService::push($serverId, 'sync.user.delta', $payload)) {
-                    $notifiedCount++;
+            try {
+                if (NodeSyncService::notifyUserChanged($user)) {
+                    $notified++;
                 } else {
                     $allPushed = false;
                 }
+            } catch (LockTimeoutException $e) {
+                Log::warning("[CheckExpiredUsers] Lock timeout for user #{$userId}, will retry next run");
+                $allPushed = false;
             }
         }
 
-        // 只有全部推送成功才推进进度；否则保留 since，
+        // 只有全部成功才推进进度；否则保留 since，
         // 下一轮会重扫同一区间补发（remove 幂等，重复推送无副作用）。
         if ($allPushed) {
             Cache::forever(self::LAST_CHECKED_AT_KEY, $now);
@@ -83,27 +87,6 @@ class CheckExpiredUsers extends Command
             $this->warn("Some pushes failed, keeping checkpoint at {$since} for retry.");
         }
 
-        $this->info("Found {$expiredUsers->count()} expired users since {$since}, notified {$notifiedCount} nodes.");
-    }
-
-    /**
-     * @return array<int, int[]> groupId => 在线节点 ID 列表
-     */
-    private function resolveOnlineServersByGroup(array $groupIds): array
-    {
-        $result = [];
-        foreach ($groupIds as $groupId) {
-            $serverIds = Server::whereJsonContains('group_ids', (string) $groupId)
-                ->pluck('id')
-                ->filter(fn($id) => NodeSyncService::isNodeOnline($id))
-                ->values()
-                ->all();
-
-            if (!empty($serverIds)) {
-                $result[$groupId] = $serverIds;
-            }
-        }
-
-        return $result;
+        $this->info("Processed " . count($candidateIds) . " expired users since {$since}, synced {$notified}.");
     }
 }
