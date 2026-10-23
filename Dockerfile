@@ -13,6 +13,9 @@ RUN CFLAGS="-O0" install-php-extensions pcntl && \
 
 RUN IPE_PROCESSOR_COUNT=2 install-php-extensions zip
 
+# Keep Redis independent of Alpine's package version to preserve RDB 14 compatibility.
+COPY --from=redis:8-alpine /usr/local/bin/redis-* /usr/local/bin/
+
 RUN apk --no-cache add \
         shadow \
         sqlite \
@@ -22,8 +25,11 @@ RUN apk --no-cache add \
         git \
         patch \
         supervisor \
-        redis \
+        libssl3 \
+        libcrypto3 \
         caddy && \
+    redis-server --version && \
+    redis-cli --version && \
     addgroup -S -g 1000 www && \
     adduser -S -G www -u 1000 www && \
     (getent group redis || addgroup -S redis) && \
