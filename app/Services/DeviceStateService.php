@@ -771,9 +771,9 @@ LUA;
     }
 
     /**
-     * 一条双栈宽带通常同时出现一个 IPv4 地址和一个 IPv6 /64，设备数取不同 IPv4
-     * 地址数与不同 IPv6 /64 数的较大值；按 /64 归并也让轮换的 IPv6 临时地址仍算
-     * 同一设备。无法解析的字符串按 IPv4 计。须与 xboard-node limiter 的规则一致。
+     * 双栈宽带下各设备共用 NAT 后的 IPv4，但各有自己的 IPv6 地址，设备数取不同
+     * IPv4 地址数与不同 IPv6 地址数的较大值。IPv6 轮换出的旧地址由节点在上报前
+     * 剔除。无法解析的字符串按 IPv4 计。须与 xboard-node limiter 的规则一致。
      */
     public static function countDevices(array $ips): int
     {
@@ -781,14 +781,20 @@ LUA;
         $v6 = [];
         foreach ($ips as $ip) {
             $ip = (string) $ip;
-            $addr = preg_replace('/%.*$/', '', $ip); // drop IPv6 zone
-            $bin = filter_var($addr, FILTER_VALIDATE_IP) !== false ? inet_pton($addr) : false;
+            $bin = filter_var($ip, FILTER_VALIDATE_IP) !== false ? inet_pton($ip) : false;
+            $zone = strpos($ip, '%');
+            if ($bin === false && $zone !== false) {
+                $addr = substr($ip, 0, $zone);
+                if (filter_var($addr, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+                    $bin = inet_pton($addr);
+                }
+            }
             if ($bin !== false && strlen($bin) === 16
                 && strncmp($bin, "\0\0\0\0\0\0\0\0\0\0\xff\xff", 12) === 0) {
                 $bin = substr($bin, 12);
             }
             if ($bin !== false && strlen($bin) === 16) {
-                $v6[substr($bin, 0, 8)] = true;
+                $v6[$bin] = true;
             } else {
                 $v4[$bin !== false ? inet_ntop($bin) : $ip] = true;
             }
