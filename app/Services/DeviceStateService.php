@@ -772,8 +772,8 @@ LUA;
 
     /**
      * 双栈宽带下各设备共用 NAT 后的 IPv4，但各有自己的 IPv6 地址，设备数取不同
-     * IPv4 地址数与不同 IPv6 地址数的较大值。IPv6 轮换出的旧地址由节点在上报前
-     * 剔除。无法解析的字符串按 IPv4 计。须与 xboard-node limiter 的规则一致。
+     * IPv4 地址数与不同 IPv6 地址数的较大值。无法解析的字符串按 IPv4 计。须与
+     * xboard-node limiter 的规则一致。
      */
     public static function countDevices(array $ips): int
     {
