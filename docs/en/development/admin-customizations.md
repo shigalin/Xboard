@@ -34,8 +34,13 @@ submodule is unnecessary. Deployment and publication remain separate operations.
 (`Y-m-d`, inclusive). Each day counts distinct users with positive upload plus
 download in the existing user statistics, across all rate rows, and sums user
 traffic including node rates. This installation uses positive node rates. The
-statistics reuse the existing table without new columns, database migrations,
-or changes to traffic recording and accounting.
+statistics reuse the existing table without new columns and without changing
+traffic recording or accounting. The only schema change is
+`idx_stat_user_usage`, a covering index on `(record_type, record_at, user_id,
+u, d)`: `idx_stat_user_record_user` serves the range scan but leaves
+`record_type`, `u` and `d` to row lookups, so both aggregates would otherwise
+read every row in the range. Adding it to a large table takes a while, and it
+costs one more index on each stat upsert.
 Days without records return zero. The summary counts distinct users across the
 whole selected period, rather than summing daily counts.
 
@@ -45,10 +50,14 @@ Older dates are rejected rather than filled with misleading zeroes. The existing
 log retention and cleanup schedule are unchanged.
 The lower bound also respects the previous month's final cleanup cutoff, so
 PHP month overflow at a month boundary cannot reopen dates already purged.
+`available_from` is already a calendar date in the application timezone, so the
+day picker uses it as-is. The build script's UTC+8 normalization applies to
+instants only; shifting a date would move the picker's bound by one day for
+browsers east of UTC+8 and let it offer a day the API rejects.
 
 Neither view polls on a timer. The upstream card this replaces refetched every
 30 seconds, which suited one row per day of order totals; these daily aggregates
-scan users x rates x days twice per request, so the card now refetches on mount,
+read users x rates x days twice per request, so the card now refetches on mount,
 on a range change, or on focus once its data is five minutes stale. The
 online-IP dialog queries only when it is opened.
 

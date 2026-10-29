@@ -41,7 +41,11 @@ try {
         ['value:"amount",children:o("dashboard:overview.amount")', 'value:"users",children:o("dashboard:usage.users")'],
         ['value:"count",children:o("dashboard:overview.count")', 'value:"traffic",children:o("dashboard:usage.traffic")'],
         ['U$t.map(e=>Q.jsx(', 'U$t.filter(e=>["7d","30d","custom"].includes(e.value)).map(e=>Q.jsx('],
-        ['captionLayout:"dropdown",numberOfMonths:2', 'captionLayout:"dropdown",numberOfMonths:2,disabled:[{before:d?.summary?.available_from?ES(new Date(d.summary.available_from+"T00:00:00")):bS(ES(new Date),29)},{after:ES(new Date)}]'],
+        // available_from is already a calendar date in the application
+        // timezone, so it is used as-is; ES() belongs on instants only, and
+        // shifting a date here moves the day picker's bound by one day for
+        // browsers east of UTC+8.
+        ['captionLayout:"dropdown",numberOfMonths:2', 'captionLayout:"dropdown",numberOfMonths:2,disabled:[{before:d?.summary?.available_from?new Date(d.summary.available_from+"T00:00:00"):bS(ES(new Date),29)},{after:ES(new Date)}]'],
         ['className:"flex items-center justify-between"', 'className:"flex flex-wrap items-center justify-between gap-4"'],
         ['className:"flex items-center gap-2"', 'className:"flex flex-wrap items-center gap-2"'],
         ['className:"flex min-w-0 items-center gap-1"', 'className:"flex min-w-0 flex-wrap items-center gap-1"'],
