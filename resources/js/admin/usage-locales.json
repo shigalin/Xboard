@@ -11,6 +11,7 @@
       "people": "{{count}} 人",
       "dailyUsers": "每日有流量的使用人数",
       "dailyTraffic": "每日使用流量",
+      "retention": "使用记录保留近两个月，可查询 {{date}} 起的数据",
       "loading": "正在加载使用统计…",
       "loadError": "使用统计加载失败",
       "retry": "重试"
@@ -41,6 +42,7 @@
       "people": "{{count}} users",
       "dailyUsers": "Daily users with traffic",
       "dailyTraffic": "Daily traffic usage",
+      "retention": "Usage records are retained for about two months. Available from {{date}}.",
       "loading": "Loading usage statistics…",
       "loadError": "Unable to load usage statistics",
       "retry": "Retry"
@@ -71,6 +73,7 @@
       "people": "{{count}} пользователей",
       "dailyUsers": "Пользователи с трафиком за день",
       "dailyTraffic": "Трафик за день",
+      "retention": "Данные хранятся около двух месяцев. Доступны с {{date}}.",
       "loading": "Загрузка статистики…",
       "loadError": "Не удалось загрузить статистику",
       "retry": "Повторить"

@@ -45,6 +45,7 @@ function XboardUsageContent({ data, metric, loading, error, retry }) {
   const key = users ? 'active_users' : 'traffic';
   const color = 'hsl(var(--primary))';
   return h(H.Fragment, null,
+    h('p', { className: 'mb-4 text-xs text-muted-foreground' }, t('usage.retention', { date: data?.summary?.available_from })),
     h(XboardUsageSummary, { summary: data?.summary }),
     h('div', { className: 'h-[400px] w-full', 'aria-label': t(users ? 'usage.dailyUsers' : 'usage.dailyTraffic') },
       h(LSt, { width: '100%', height: '100%' },
@@ -97,9 +98,10 @@ function XboardRecentIPs({ user, children, className }) {
       const response = await IL(OL() + '/user/getRecentIPs', { params: { id: user.id } });
       return response.data;
     },
+    // Fetched only when the dialog is opened; no background polling, so the
+    // admin UI keeps its previous request pattern.
     enabled: open,
     staleTime: 0,
-    refetchInterval: open ? 30000 : false,
   });
   let content;
   if (isLoading) content = h('p', { className: 'py-8 text-center text-muted-foreground', role: 'status' }, t('recentIPs.loading'));

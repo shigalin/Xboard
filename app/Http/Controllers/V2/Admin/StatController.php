@@ -200,13 +200,21 @@ class StatController extends Controller
 
     public function getUsage(Request $request)
     {
+        $today = Carbon::today();
+        // reset:log removes records before strtotime('-2 month'), including
+        // the boundary day's midnight after the scheduled command starts.
+        $availableFrom = Carbon::createFromTimestamp(strtotime('-2 month', $today->timestamp), $today->getTimezone())
+            ->startOfDay()->addDay()->format('Y-m-d');
         $request->mergeIfMissing([
-            'start_date' => date('Y-m-d', strtotime('-29 days')),
-            'end_date' => date('Y-m-d'),
+            'start_date' => $today->copy()->subDays(29)->format('Y-m-d'),
+            'end_date' => $today->format('Y-m-d'),
         ]);
         $params = $request->validate([
-            'start_date' => 'required|date_format:Y-m-d',
-            'end_date' => 'required|date_format:Y-m-d|after_or_equal:start_date',
+            'start_date' => 'required|date_format:Y-m-d|after_or_equal:' . $availableFrom,
+            'end_date' => 'required|date_format:Y-m-d|after_or_equal:start_date|before_or_equal:' . $today->format('Y-m-d'),
+        ], [
+            'start_date.after_or_equal' => '使用记录仅保留近两个月，开始日期不能早于 ' . $availableFrom,
+            'end_date.before_or_equal' => '结束日期不能晚于今天',
         ]);
 
         $start = Carbon::parse($params['start_date'])->startOfDay();
@@ -240,6 +248,7 @@ class StatController extends Controller
             'summary' => [
                 'start_date' => $params['start_date'],
                 'end_date' => $params['end_date'],
+                'available_from' => $availableFrom,
                 'active_users' => (clone $query)->distinct()->count('user_id'),
                 'traffic' => $traffic,
                 'avg_daily_users' => round(array_sum(array_column($dailyStats, 'active_users')) / $days, 2),

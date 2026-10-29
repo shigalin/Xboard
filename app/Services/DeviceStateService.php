@@ -55,6 +55,29 @@ LUA;
     private const CLEAR_TOKEN_PREFIX = 'device:node_clear_token:';
     private const WORK_SET_PREFIX = 'device:node_work_set:';
 
+    // Admin-only projection. Call after accepting core device state, inside
+    // pcall, so history errors cannot alter online counts or sequence fences.
+    private const RECENT_IP_WRITER_LUA = <<<'LUA'
+local function rememberRecentIPs(key, ips, timestamp, ttl, limit)
+    local updates = {}
+    for i = 1, math.min(#ips, limit) do
+        local ip = ips[i]
+        local previous = redis.call('ZSCORE', key, ip)
+        if not previous or tonumber(previous) < timestamp then
+            table.insert(updates, timestamp)
+            table.insert(updates, ip)
+        end
+    end
+    if #updates > 0 then
+        redis.call('ZADD', key, unpack(updates))
+    end
+    redis.call('ZREMRANGEBYSCORE', key, '-inf', timestamp - ttl)
+    redis.call('ZREMRANGEBYRANK', key, 0, -limit - 1)
+    redis.call('EXPIRE', key, ttl)
+end
+
+LUA;
+
     /**
      * Fence older REST/WS reports before applying bounded mutation batches.
      */
@@ -95,7 +118,7 @@ LUA;
      * Refresh at most SYNC_BATCH_SIZE users. Per-user sequences allow an older
      * accepted batch to finish without overwriting a newer overlapping report.
      */
-    private const SYNC_NODE_BATCH_LUA = <<<'LUA'
+    private const SYNC_NODE_BATCH_LUA = self::RECENT_IP_WRITER_LUA . <<<'LUA'
 local sequenceKey = ARGV[1]
 local reportTypeKey = ARGV[2]
 local userSequencePrefix = ARGV[3]
@@ -125,6 +148,7 @@ if current ~= incoming and redis.call('GET', reportTypeKey) == '1' then
 end
 
 local notifyUsers = {}
+local recentUsers = {}
 for userId, ips in pairs(devices) do
     local userSequenceKey = userSequencePrefix .. userId
     local userSequence = redis.call('GET', userSequenceKey)
@@ -152,14 +176,9 @@ for userId, ips in pairs(devices) do
 
         redis.call('SREM', indexKey, userId)
         if #ips > 0 then
-            local recentIPKey = recentIPPrefix .. userId
             for _, ip in ipairs(ips) do
                 redis.call('HSET', hashKey, nodePrefix .. ip, timestamp)
-                redis.call('ZADD', recentIPKey, timestamp, ip)
             end
-            redis.call('ZREMRANGEBYSCORE', recentIPKey, '-inf', tonumber(timestamp) - recentIPTTL)
-            redis.call('ZREMRANGEBYRANK', recentIPKey, 0, -recentIPLimit - 1)
-            redis.call('EXPIRE', recentIPKey, recentIPTTL)
             redis.call('EXPIRE', hashKey, ttl)
             redis.call('SADD', indexKey, userId)
         end
@@ -171,6 +190,9 @@ for userId, ips in pairs(devices) do
             table.insert(notifyUsers, userId)
         end
         redis.call('SETEX', userSequenceKey, ttl * 2, incoming)
+        if #ips > 0 then
+            recentUsers[userId] = ips
+        end
     end
 end
 
@@ -183,6 +205,9 @@ end
 local result = {1}
 for _, userId in ipairs(notifyUsers) do
     table.insert(result, userId)
+end
+for userId, ips in pairs(recentUsers) do
+    pcall(rememberRecentIPs, recentIPPrefix .. userId, ips, tonumber(timestamp), recentIPTTL, recentIPLimit)
 end
 return result
 LUA;
@@ -469,22 +494,30 @@ LUA;
             Redis::hMset($key, $fields);
             Redis::expire($key, self::TTL);
 
-            $recentKey = self::RECENT_IP_PREFIX . $userId;
-            Redis::pipeline(function ($pipe) use ($recentKey, $ips, $timestamp): void {
-                foreach ($ips as $ip) {
-                    $pipe->zadd($recentKey, $timestamp, $ip);
-                }
-                $pipe->zremrangebyscore($recentKey, '-inf', $timestamp - self::RECENT_IP_TTL);
-                $pipe->zremrangebyrank($recentKey, 0, -self::RECENT_IP_LIMIT - 1);
-                $pipe->expire($recentKey, self::RECENT_IP_TTL);
-            });
-
             $indexKey = self::INDEX_PREFIX . $nodeId;
             Redis::sadd($indexKey, $userId);
             Redis::expire($indexKey, self::INDEX_TTL);
         }
 
         $this->queueUpdates([$userId]);
+
+        if ($ips !== []) {
+            try {
+                Redis::eval(
+                    self::RECENT_IP_WRITER_LUA
+                        . "return pcall(rememberRecentIPs, KEYS[1], cjson.decode(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4]))",
+                    1,
+                    self::RECENT_IP_PREFIX . $userId,
+                    json_encode(array_slice($ips, 0, self::RECENT_IP_LIMIT), JSON_THROW_ON_ERROR),
+                    (string) $timestamp,
+                    (string) self::RECENT_IP_TTL,
+                    (string) self::RECENT_IP_LIMIT
+                );
+            } catch (\Throwable) {
+                // Optional history must not fail a device update already
+                // accepted and queued for DB synchronization above.
+            }
+        }
     }
 
     /**

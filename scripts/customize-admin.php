@@ -32,9 +32,16 @@ try {
         ['{data:d}=pC', '{data:d,isLoading:usageLoading,isError:usageError,refetch:retryUsage}=pC'],
         ['queryKey:["orderStat"', 'queryKey:["usageStat"'],
         ['await AL({start_date:c(a),end_date:c(l)})', 'await IL(ML+"/stat/getUsage",{params:{start_date:c(a),end_date:c(l)}})'],
+        // Upstream polls this card every 30s because its order totals change
+        // during the day and cost one row per day. These daily aggregates scan
+        // users x rates x days twice per request, so drop the timer and refetch
+        // on mount, on a range change, or on focus once the data is stale.
+        ['refetchInterval:3e4', 'staleTime:3e5'],
         ['o("dashboard:overview.title")', 'o("dashboard:usage.title")'],
         ['value:"amount",children:o("dashboard:overview.amount")', 'value:"users",children:o("dashboard:usage.users")'],
         ['value:"count",children:o("dashboard:overview.count")', 'value:"traffic",children:o("dashboard:usage.traffic")'],
+        ['U$t.map(e=>Q.jsx(', 'U$t.filter(e=>["7d","30d","custom"].includes(e.value)).map(e=>Q.jsx('],
+        ['captionLayout:"dropdown",numberOfMonths:2', 'captionLayout:"dropdown",numberOfMonths:2,disabled:[{before:d?.summary?.available_from?ES(new Date(d.summary.available_from+"T00:00:00")):bS(ES(new Date),29)},{after:ES(new Date)}]'],
         ['className:"flex items-center justify-between"', 'className:"flex flex-wrap items-center justify-between gap-4"'],
         ['className:"flex items-center gap-2"', 'className:"flex flex-wrap items-center gap-2"'],
         ['className:"flex min-w-0 items-center gap-1"', 'className:"flex min-w-0 flex-wrap items-center gap-1"'],

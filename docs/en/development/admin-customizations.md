@@ -32,9 +32,23 @@ submodule is unnecessary. Deployment and publication remain separate operations.
 
 `GET /api/v2/{secure_path}/stat/getUsage` accepts `start_date` and `end_date`
 (`Y-m-d`, inclusive). Each day counts distinct users with positive upload plus
-download, across all rate rows, and sums user traffic including node rates.
+download in the existing user statistics, across all rate rows, and sums user
+traffic including node rates. This installation uses positive node rates. The
+statistics reuse the existing table without new columns, database migrations,
+or changes to traffic recording and accounting.
 Days without records return zero. The summary counts distinct users across the
 whole selected period, rather than summing daily counts.
+
+The API and date picker restrict dates to the window retained by `reset:log`
+(about two months, through today). The response includes `summary.available_from`.
+Older dates are rejected rather than filled with misleading zeroes. The existing
+log retention and cleanup schedule are unchanged.
+
+Neither view polls on a timer. The upstream card this replaces refetched every
+30 seconds, which suited one row per day of order totals; these daily aggregates
+scan users x rates x days twice per request, so the card now refetches on mount,
+on a range change, or on focus once its data is five minutes stale. The
+recent-IP dialog queries only when it is opened.
 
 `GET /api/v2/{secure_path}/user/getRecentIPs?id=...` returns node-reported usage
 IPs, most recent first, with `last_seen_at` and `is_online`. Both endpoints use
@@ -42,3 +56,13 @@ the existing admin middleware. IP history starts with reports received after
 this change, retains up to 100 IPs per user for 24 hours, and expires in Redis.
 It is independent of the five-minute online state and survives disconnects and
 empty device reports. Reports rejected by the sequence fence do not update it.
+
+Before this feature, online IPs were valid for 300 seconds; there was no seven-day
+history. The current history is a separate admin-only projection and is never
+read by device counting, admission, alive lists or node synchronization. Core
+device updates retain their original 300-second TTL, IP counting and sequence
+fences. History is written only after core state is accepted, with failures
+isolated from the original result. Both writers retain the maximum timestamp
+across nodes, process at most 100 history IPs per user/report, and batch score
+writes in Lua. Sequenced reports add no Redis round trip; legacy reports add
+one bounded history call after the original device update and DB-sync queueing.

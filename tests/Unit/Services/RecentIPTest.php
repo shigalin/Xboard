@@ -51,6 +51,8 @@ class RecentIPTest extends TestCase
         $this->assertCount(2, $records);
         $this->assertSame([false, false], array_column($records, 'is_online'));
         $this->assertGreaterThan(300, Redis::ttl('user_recent_ips:1'));
+        $this->assertSame(0, $service->getDeviceCount(1));
+        $this->assertSame([], $service->getUsersDevices([1]));
     }
 
     public function test_sequenced_reports_retain_history_without_accepting_stale_ips(): void
@@ -83,9 +85,11 @@ class RecentIPTest extends TestCase
         $service->syncNodeDevices(1, [1 => $ips], 100, true);
         $this->assertCount(100, $service->getRecentIPs(1));
         $this->assertSame(100, Redis::zcard('user_recent_ips:1'));
+        $this->assertSame(120, $service->getDeviceCount(1));
 
         $service->setDevices(2, 2, $ips);
         $this->assertSame(100, Redis::zcard('user_recent_ips:2'));
+        $this->assertSame(120, $service->getDeviceCount(2));
     }
 
     public function test_delta_reports_and_disconnect_preserve_history_and_other_nodes(): void
@@ -98,5 +102,57 @@ class RecentIPTest extends TestCase
         $this->assertCount(2, $records);
         $this->assertTrue($records['192.0.2.1']['is_online']);
         $this->assertFalse($records['2001:db8::1']['is_online']);
+    }
+
+    public function test_legacy_history_does_not_overwrite_a_newer_report(): void
+    {
+        $newer = time() + 15;
+        Redis::zadd('user_recent_ips:1', $newer, '192.0.2.1');
+        $service = new DeviceStateService();
+        $service->setDevices(1, 1, ['192.0.2.1']);
+        $this->assertSame($newer, (int) Redis::zscore('user_recent_ips:1', '192.0.2.1'));
+    }
+
+    public function test_cross_node_history_does_not_move_backwards(): void
+    {
+        $service = new DeviceStateService();
+        $service->syncNodeDevices(2, [1 => ['192.0.2.1']], 100, true);
+        $newer = (int) Redis::zscore('user_recent_ips:1', '192.0.2.1');
+        $this->applySnapshotAt(1, ['192.0.2.1'], $newer - 15);
+        $service->clearAllNodeDevices(2, 100);
+        $this->assertSame($newer, $service->getRecentIPs(1)[0]['last_seen_at']);
+        $this->assertSame(1, $service->getDeviceCount(1));
+    }
+
+    public function test_broken_history_does_not_interrupt_device_state(): void
+    {
+        Redis::set('user_recent_ips:1', 'wrong-type');
+        $service = new DeviceStateService();
+        $this->assertSame([1], $service->syncNodeDevices(1, [1 => ['192.0.2.1']], 100, true));
+        $this->assertSame(1, $service->getDeviceCount(1));
+        $this->assertGreaterThan(0, Redis::ttl('user_devices:1'));
+        $this->assertLessThanOrEqual(300, Redis::ttl('user_devices:1'));
+        $this->assertSame('100', (string) Redis::get('device:node_user_sequence:1:1'));
+        $service->setDevices(1, 2, ['2001:db8::1']);
+        $this->assertSame(1, $service->getDeviceCount(1));
+        $this->assertSame(1, (int) Redis::sismember('device:db_sync_pending', 1));
+    }
+
+    private function applySnapshotAt(int $nodeId, array $ips, int $timestamp): void
+    {
+        Redis::set('device:node_sequence:' . $nodeId, '100');
+        Redis::set('device:node_report_full:' . $nodeId, '1');
+        $lua = (new \ReflectionClass(DeviceStateService::class))->getConstant('SYNC_NODE_BATCH_LUA');
+        $prefix = $this->redisPrefix;
+        Redis::eval($lua, 0,
+            $prefix . 'device:node_sequence:' . $nodeId,
+            $prefix . 'device:node_report_full:' . $nodeId,
+            $prefix . 'device:node_user_sequence:' . $nodeId . ':',
+            $prefix . 'device:online_touch_due:',
+            $prefix . 'device:node_index:' . $nodeId,
+            $prefix . 'user_devices:', $nodeId . ':', '100', '300', '300',
+            (string) $timestamp, json_encode((object) [1 => $ips], JSON_THROW_ON_ERROR),
+            $prefix . 'user_recent_ips:', '86400', '100'
+        );
     }
 }
