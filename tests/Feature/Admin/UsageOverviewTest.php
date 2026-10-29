@@ -109,29 +109,33 @@ class UsageOverviewTest extends TestCase
         }
     }
 
-    public function test_usage_and_recent_ips_require_admin_access(): void
+    public function test_usage_and_online_ips_require_admin_access(): void
     {
         $this->getJson($this->endpoint('stat/getUsage'))->assertForbidden();
-        $this->getJson($this->endpoint('user/getRecentIPs') . '?id=1')->assertForbidden();
+        $this->getJson($this->endpoint('user/getOnlineIPs') . '?id=1')->assertForbidden();
         Sanctum::actingAs($this->createUser(false));
         $this->getJson($this->endpoint('stat/getUsage'))->assertForbidden();
-        $this->getJson($this->endpoint('user/getRecentIPs') . '?id=1')->assertForbidden();
+        $this->getJson($this->endpoint('user/getOnlineIPs') . '?id=1')->assertForbidden();
     }
 
-    public function test_recent_ips_validates_user_and_returns_empty_history(): void
+    public function test_online_ips_validates_user_and_reads_current_device_state(): void
     {
         $admin = $this->createUser();
         Sanctum::actingAs($admin);
-        $this->getJson($this->endpoint('user/getRecentIPs'))->assertUnprocessable();
-        $this->getJson($this->endpoint('user/getRecentIPs') . '?id=999999')->assertStatus(400);
-        $this->getJson($this->endpoint('user/getRecentIPs') . '?id=' . $admin->id)
+        $this->getJson($this->endpoint('user/getOnlineIPs'))->assertUnprocessable();
+        $this->getJson($this->endpoint('user/getOnlineIPs') . '?id=999999')->assertStatus(400);
+        $this->getJson($this->endpoint('user/getOnlineIPs') . '?id=' . $admin->id)
             ->assertOk()->assertJsonPath('data', []);
 
         $service = new DeviceStateService();
         $service->setDevices($admin->id, 1, ['[2001:db8::1]:443']);
-        $this->getJson($this->endpoint('user/getRecentIPs') . '?id=' . $admin->id)
+        $this->getJson($this->endpoint('user/getOnlineIPs') . '?id=' . $admin->id)
             ->assertOk()->assertJsonPath('data.0.ip', '2001:db8::1')
             ->assertJsonPath('data.0.is_online', true);
+
+        $service->setDevices($admin->id, 1, []);
+        $this->getJson($this->endpoint('user/getOnlineIPs') . '?id=' . $admin->id)
+            ->assertOk()->assertJsonPath('data', []);
     }
 
     public function test_rejects_history_outside_the_retained_window_and_future_dates(): void
@@ -155,6 +159,38 @@ class UsageOverviewTest extends TestCase
                 ->assertUnprocessable();
             $this->getJson($this->endpoint('stat/getUsage') . '?start_date=2026-03-03&end_date=2026-04-30')
                 ->assertOk();
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_month_boundary_does_not_reopen_previously_deleted_usage(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-04-30 12:00:00'));
+        try {
+            Sanctum::actingAs($this->createUser());
+            foreach (['2026-03-02', '2026-03-03'] as $date) {
+                StatUser::create([
+                    'user_id' => 1, 'server_rate' => '1.00',
+                    'record_at' => Carbon::parse($date)->timestamp, 'record_type' => 'd',
+                    'u' => 10, 'd' => 20,
+                ]);
+            }
+            // Match a reset:log run just after midnight on April 30.
+            $cleanupAt = Carbon::parse('2026-04-30 00:00:01')->timestamp;
+            StatUser::where('record_at', '<', strtotime('-2 month', $cleanupAt))->delete();
+            $this->assertSame(1, StatUser::count());
+
+            foreach (['2026-05-01', '2026-05-02'] as $today) {
+                Carbon::setTestNow(Carbon::parse($today . ' 12:00:00'));
+                $this->getJson($this->endpoint('stat/getUsage') . '?start_date=2026-03-02&end_date=2026-03-02')
+                    ->assertUnprocessable();
+                $this->getJson($this->endpoint('stat/getUsage') . '?start_date=2026-03-03&end_date=2026-03-03')
+                    ->assertOk()->assertJsonPath('data.summary.available_from', '2026-03-03')
+                    ->assertJsonPath('data.list', [
+                        ['date' => '2026-03-03', 'active_users' => 1, 'traffic' => 30],
+                    ]);
+            }
         } finally {
             Carbon::setTestNow();
         }

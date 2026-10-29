@@ -129,7 +129,7 @@ class AdminRoute
                 $router->any('/fetch', [UserController::class, 'fetch']);
                 $router->post('/update', [UserController::class, 'update']);
                 $router->get('/getUserInfoById', [UserController::class, 'getUserInfoById']);
-                $router->get('/getRecentIPs', [UserController::class, 'getRecentIPs']);
+                $router->get('/getOnlineIPs', [UserController::class, 'getOnlineIPs']);
                 $router->post('/generate', [UserController::class, 'generate']);
                 $router->post('/dumpCSV', [UserController::class, 'dumpCSV']);
                 $router->post('/sendMail', [UserController::class, 'sendMail']);

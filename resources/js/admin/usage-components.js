@@ -75,7 +75,7 @@ function XboardUserDevices({ user, t }) {
   return h(Zot, { delayDuration: 100 },
     h(Yot, null,
       h(Xot, { asChild: true }, h('div', { className: 'flex items-center gap-1.5' },
-        h(XboardRecentIPs, { user }, h(nKt, {
+        h(XboardOnlineIPs, { user }, h(nKt, {
           variant: 'outline',
           className: Im('min-w-[4rem] justify-center', limit !== null && count >= limit
             ? 'border-destructive/50 bg-destructive/10 text-destructive'
@@ -87,15 +87,15 @@ function XboardUserDevices({ user, t }) {
   );
 }
 
-function XboardRecentIPs({ user, children, className }) {
+function XboardOnlineIPs({ user, children, className }) {
   const h = H.createElement;
   const { t } = jy('user');
   const [open, setOpen] = H.useState(false);
   const focusTitle = H.useCallback((element) => element?.focus(), []);
   const { data, isLoading, isError, refetch } = pC({
-    queryKey: ['userRecentIPs', user.id],
+    queryKey: ['userOnlineIPs', user.id],
     queryFn: async () => {
-      const response = await IL(OL() + '/user/getRecentIPs', { params: { id: user.id } });
+      const response = await IL(OL() + '/user/getOnlineIPs', { params: { id: user.id } });
       return response.data;
     },
     // Fetched only when the dialog is opened; no background polling, so the
@@ -104,23 +104,23 @@ function XboardRecentIPs({ user, children, className }) {
     staleTime: 0,
   });
   let content;
-  if (isLoading) content = h('p', { className: 'py-8 text-center text-muted-foreground', role: 'status' }, t('recentIPs.loading'));
+  if (isLoading) content = h('p', { className: 'py-8 text-center text-muted-foreground', role: 'status' }, t('onlineIPs.loading'));
   else if (isError) content = h('div', { className: 'space-y-4 py-8 text-center', role: 'alert' },
-    h('p', null, t('recentIPs.loadError')),
-    h(xtt, { variant: 'outline', onClick: () => refetch() }, t('recentIPs.retry')));
-  else if (!data?.length) content = h('p', { className: 'py-8 text-center text-muted-foreground' }, t('recentIPs.empty'));
+    h('p', null, t('onlineIPs.loadError')),
+    h(xtt, { variant: 'outline', onClick: () => refetch() }, t('onlineIPs.retry')));
+  else if (!data?.length) content = h('p', { className: 'py-8 text-center text-muted-foreground' }, t('onlineIPs.empty'));
   else content = h('div', { style: { maxHeight: 'min(60vh, 480px)', overflow: 'auto' } },
     h('table', { className: 'w-full text-sm' },
       h('thead', null, h('tr', { className: 'border-b text-left text-muted-foreground' },
         h('th', { className: 'p-3' }, 'IP'),
-        h('th', { className: 'p-3' }, t('recentIPs.lastSeen')),
-        h('th', { className: 'p-3' }, t('recentIPs.status')))),
+        h('th', { className: 'p-3' }, t('onlineIPs.lastSeen')),
+        h('th', { className: 'p-3' }, t('onlineIPs.status')))),
       h('tbody', null, ...data.map((record) => h('tr', { key: record.ip, className: 'border-b' },
         h('td', { className: 'break-all p-3 font-mono' }, record.ip),
         h('td', { className: 'whitespace-nowrap p-3' }, SS(record.last_seen_at)),
         h('td', { className: 'whitespace-nowrap p-3' }, h(nKt, {
           variant: record.is_online ? 'default' : 'secondary',
-        }, t(record.is_online ? 'recentIPs.online' : 'recentIPs.offline')))
+        }, t(record.is_online ? 'onlineIPs.online' : 'onlineIPs.offline')))
       )))
     ));
 
@@ -128,7 +128,7 @@ function XboardRecentIPs({ user, children, className }) {
     h(gtt, { asChild: true }, h('button', {
       type: 'button',
       className: Im('inline-flex cursor-pointer items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring', className),
-      'aria-label': t('recentIPs.view', { email: user.email }),
+      'aria-label': t('onlineIPs.view', { email: user.email }),
       onClick: (event) => {
         event.stopPropagation();
         event.currentTarget.blur();
@@ -136,9 +136,9 @@ function XboardRecentIPs({ user, children, className }) {
     }, children)),
     h(ptt, { className: 'max-w-2xl' },
       h(mtt, null,
-        h(_tt, { ref: focusTitle, tabIndex: -1, className: 'outline-none' }, t('recentIPs.title')),
+        h(_tt, { ref: focusTitle, tabIndex: -1, className: 'outline-none' }, t('onlineIPs.title')),
         h(vtt, { className: 'break-all text-sm text-muted-foreground' },
-          user.email + ' · ' + t('recentIPs.description'))),
+          user.email + ' · ' + t('onlineIPs.description'))),
       content
     )
   );

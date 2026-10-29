@@ -226,7 +226,7 @@ class UserController extends Controller
         return $this->success($user);
     }
 
-    public function getRecentIPs(Request $request, DeviceStateService $devices)
+    public function getOnlineIPs(Request $request, DeviceStateService $devices)
     {
         $params = $request->validate([
             'id' => 'required|integer|min:1',
@@ -235,7 +235,7 @@ class UserController extends Controller
             return $this->fail([400202, '用户不存在']);
         }
 
-        return $this->success($devices->getRecentIPs((int) $params['id']));
+        return $this->success($devices->getOnlineIPs((int) $params['id']));
     }
 
     public function update(UserUpdate $request)

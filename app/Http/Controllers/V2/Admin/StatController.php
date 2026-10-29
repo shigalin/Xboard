@@ -201,9 +201,15 @@ class StatController extends Controller
     public function getUsage(Request $request)
     {
         $today = Carbon::today();
-        // reset:log removes records before strtotime('-2 month'), including
-        // the boundary day's midnight after the scheduled command starts.
-        $availableFrom = Carbon::createFromTimestamp(strtotime('-2 month', $today->timestamp), $today->getTimezone())
+        // reset:log can delete the boundary day's midnight after it starts.
+        // PHP month overflow can move today's cutoff backwards; keep the last
+        // cutoff of the previous month so deleted dates stay unavailable.
+        $previousMonthEnd = $today->copy()->startOfMonth()->subDay();
+        $cleanupCutoff = max(
+            strtotime('-2 month', $today->timestamp),
+            strtotime('-2 month', $previousMonthEnd->timestamp)
+        );
+        $availableFrom = Carbon::createFromTimestamp($cleanupCutoff, $today->getTimezone())
             ->startOfDay()->addDay()->format('Y-m-d');
         $request->mergeIfMissing([
             'start_date' => $today->copy()->subDays(29)->format('Y-m-d'),

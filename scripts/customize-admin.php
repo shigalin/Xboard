@@ -60,7 +60,7 @@ try {
 
     $statusDot = 'Q.jsx("div",{className:Im("size-2.5 rounded-full ring-2 ring-offset-2",s?"bg-green-500 ring-green-500/20":"bg-gray-300 ring-gray-300/20","transition-all duration-300")})';
     $bundle = replaceAdminFragment($bundle, $statusDot,
-        'Q.jsx(XboardRecentIPs,{user:e,className:"h-5 w-5 shrink-0",children:' . $statusDot . '})');
+        'Q.jsx(XboardOnlineIPs,{user:e,className:"h-5 w-5 shrink-0",children:' . $statusDot . '})');
 
     $devicesStart = strpos($bundle, 'cell:({row:e})=>{const t=e.original.device_limit,n=e.original.online_count||0;');
     $devicesEnd = $devicesStart === false ? false : strpos($bundle, '},enableSorting:!0,enableHiding:!1}', $devicesStart);
@@ -76,7 +76,7 @@ try {
         . "  const resources = window.XBOARD_TRANSLATIONS?.[language];\n"
         . "  if (!resources) continue;\n"
         . "  resources.dashboard.usage = additions.usage;\n"
-        . "  resources.user.recentIPs = additions.recentIPs;\n}\n";
+        . "  resources.user.onlineIPs = additions.onlineIPs;\n}\n";
     $components = file_get_contents($root . '/resources/js/admin/usage-components.js');
     $output = $localeSetup . $bundle . "\n" . $components;
     $file = 'assets/index-usage-' . substr(hash('sha256', $output), 0, 12) . '.js';

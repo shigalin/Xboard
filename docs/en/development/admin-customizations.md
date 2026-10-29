@@ -1,8 +1,8 @@
-# Usage overview and recent IPs
+# Usage overview and online IPs
 
 The upstream `.gitmodules` points to `cedar2025/xboard-admin-dist`, which only
 contains compiled admin assets. This checkout pins build `a260c84d` (dist commit
-`ef5f43d`). The readable usage and recent-IP components live in
+`ef5f43d`). The readable usage and online-IP components live in
 `resources/js/admin/` and reuse that build's React, charts, dialogs and query
 client. No frontend dependencies are added.
 
@@ -43,26 +43,25 @@ The API and date picker restrict dates to the window retained by `reset:log`
 (about two months, through today). The response includes `summary.available_from`.
 Older dates are rejected rather than filled with misleading zeroes. The existing
 log retention and cleanup schedule are unchanged.
+The lower bound also respects the previous month's final cleanup cutoff, so
+PHP month overflow at a month boundary cannot reopen dates already purged.
 
 Neither view polls on a timer. The upstream card this replaces refetched every
 30 seconds, which suited one row per day of order totals; these daily aggregates
 scan users x rates x days twice per request, so the card now refetches on mount,
 on a range change, or on focus once its data is five minutes stale. The
-recent-IP dialog queries only when it is opened.
+online-IP dialog queries only when it is opened.
 
-`GET /api/v2/{secure_path}/user/getRecentIPs?id=...` returns node-reported usage
-IPs, most recent first, with `last_seen_at` and `is_online`. Both endpoints use
-the existing admin middleware. IP history starts with reports received after
-this change, retains up to 100 IPs per user for 24 hours, and expires in Redis.
-It is independent of the five-minute online state and survives disconnects and
-empty device reports. Reports rejected by the sequence fence do not update it.
+`GET /api/v2/{secure_path}/user/getOnlineIPs?id=...` reads the user's existing
+online-device hash and returns current IPs with `last_seen_at` and `is_online`.
+Both endpoints use the existing admin middleware. The IP view uses the same
+300-second freshness rule as device counting, deduplicates IPs across nodes,
+and shows the latest report time first. It does not impose a 100-IP limit.
+An IP removed by a new report or a node disconnect is no longer displayed
+unless another node still reports it as online.
 
-Before this feature, online IPs were valid for 300 seconds; there was no seven-day
-history. The current history is a separate admin-only projection and is never
-read by device counting, admission, alive lists or node synchronization. Core
-device updates retain their original 300-second TTL, IP counting and sequence
-fences. History is written only after core state is accepted, with failures
-isolated from the original result. Both writers retain the maximum timestamp
-across nodes, process at most 100 history IPs per user/report, and batch score
-writes in Lua. Sequenced reports add no Redis round trip; legacy reports add
-one bounded history call after the original device update and DB-sync queueing.
+Viewing IPs performs one read of the existing device hash. It does not write
+history, refresh the TTL, remove stale fields or change device state. Device
+reporting, counting, sequence fences, alive lists and node synchronization
+remain as they were before the IP-view feature. Previously written history
+keys are no longer read or refreshed and expire under their existing TTL.

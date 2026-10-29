@@ -21,9 +21,6 @@ class DeviceStateService
     private const DB_SYNC_PENDING_KEY = 'device:db_sync_pending';
     private const SEQUENCE_BLOCK_SIZE = 1000000000;
     private const TTL = 300; // device state ttl
-    private const RECENT_IP_PREFIX = 'user_recent_ips:';
-    private const RECENT_IP_TTL = 86400; // 1 day
-    private const RECENT_IP_LIMIT = 100;
     private const INDEX_TTL = 3600;
     // How long a written online_count is trusted before being rewritten even
     // if unchanged. Must stay well under CleanupOnlineStatus's 10-minute
@@ -54,29 +51,6 @@ LUA;
     private const SYNC_BATCH_SIZE = 200;
     private const CLEAR_TOKEN_PREFIX = 'device:node_clear_token:';
     private const WORK_SET_PREFIX = 'device:node_work_set:';
-
-    // Admin-only projection. Call after accepting core device state, inside
-    // pcall, so history errors cannot alter online counts or sequence fences.
-    private const RECENT_IP_WRITER_LUA = <<<'LUA'
-local function rememberRecentIPs(key, ips, timestamp, ttl, limit)
-    local updates = {}
-    for i = 1, math.min(#ips, limit) do
-        local ip = ips[i]
-        local previous = redis.call('ZSCORE', key, ip)
-        if not previous or tonumber(previous) < timestamp then
-            table.insert(updates, timestamp)
-            table.insert(updates, ip)
-        end
-    end
-    if #updates > 0 then
-        redis.call('ZADD', key, unpack(updates))
-    end
-    redis.call('ZREMRANGEBYSCORE', key, '-inf', timestamp - ttl)
-    redis.call('ZREMRANGEBYRANK', key, 0, -limit - 1)
-    redis.call('EXPIRE', key, ttl)
-end
-
-LUA;
 
     /**
      * Fence older REST/WS reports before applying bounded mutation batches.
@@ -118,7 +92,7 @@ LUA;
      * Refresh at most SYNC_BATCH_SIZE users. Per-user sequences allow an older
      * accepted batch to finish without overwriting a newer overlapping report.
      */
-    private const SYNC_NODE_BATCH_LUA = self::RECENT_IP_WRITER_LUA . <<<'LUA'
+    private const SYNC_NODE_BATCH_LUA = <<<'LUA'
 local sequenceKey = ARGV[1]
 local reportTypeKey = ARGV[2]
 local userSequencePrefix = ARGV[3]
@@ -131,9 +105,6 @@ local ttl = tonumber(ARGV[9])
 local touchTTL = tonumber(ARGV[10])
 local timestamp = ARGV[11]
 local devices = cjson.decode(ARGV[12])
-local recentIPPrefix = ARGV[13]
-local recentIPTTL = tonumber(ARGV[14])
-local recentIPLimit = tonumber(ARGV[15])
 
 local function decimalGreater(left, right)
     if string.len(left) ~= string.len(right) then
@@ -148,7 +119,6 @@ if current ~= incoming and redis.call('GET', reportTypeKey) == '1' then
 end
 
 local notifyUsers = {}
-local recentUsers = {}
 for userId, ips in pairs(devices) do
     local userSequenceKey = userSequencePrefix .. userId
     local userSequence = redis.call('GET', userSequenceKey)
@@ -190,9 +160,6 @@ for userId, ips in pairs(devices) do
             table.insert(notifyUsers, userId)
         end
         redis.call('SETEX', userSequenceKey, ttl * 2, incoming)
-        if #ips > 0 then
-            recentUsers[userId] = ips
-        end
     end
 end
 
@@ -205,9 +172,6 @@ end
 local result = {1}
 for _, userId in ipairs(notifyUsers) do
     table.insert(result, userId)
-end
-for userId, ips in pairs(recentUsers) do
-    pcall(rememberRecentIPs, recentIPPrefix .. userId, ips, tonumber(timestamp), recentIPTTL, recentIPLimit)
 end
 return result
 LUA;
@@ -500,24 +464,6 @@ LUA;
         }
 
         $this->queueUpdates([$userId]);
-
-        if ($ips !== []) {
-            try {
-                Redis::eval(
-                    self::RECENT_IP_WRITER_LUA
-                        . "return pcall(rememberRecentIPs, KEYS[1], cjson.decode(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4]))",
-                    1,
-                    self::RECENT_IP_PREFIX . $userId,
-                    json_encode(array_slice($ips, 0, self::RECENT_IP_LIMIT), JSON_THROW_ON_ERROR),
-                    (string) $timestamp,
-                    (string) self::RECENT_IP_TTL,
-                    (string) self::RECENT_IP_LIMIT
-                );
-            } catch (\Throwable) {
-                // Optional history must not fail a device update already
-                // accepted and queued for DB synchronization above.
-            }
-        }
     }
 
     /**
@@ -613,10 +559,7 @@ LUA;
                 (string) self::TTL,
                 (string) self::TOUCH_TTL,
                 $timestamp,
-                json_encode((object) $deviceBatch, JSON_THROW_ON_ERROR),
-                $redisPrefix . self::RECENT_IP_PREFIX,
-                (string) self::RECENT_IP_TTL,
-                (string) self::RECENT_IP_LIMIT
+                json_encode((object) $deviceBatch, JSON_THROW_ON_ERROR)
             );
 
             if (!is_array($batchResult) || (int) ($batchResult[0] ?? 0) !== 1) {
@@ -911,32 +854,25 @@ LUA;
         return $result;
     }
 
-    /** Recent node-reported usage IPs, retained independently of online state. */
-    public function getRecentIPs(int $userId): array
+    /** Read current online IPs without changing device state or its TTL. */
+    public function getOnlineIPs(int $userId): array
     {
         $now = time();
-        $recent = Redis::zrevrangebyscore(
-            self::RECENT_IP_PREFIX . $userId,
-            '+inf',
-            '(' . ($now - self::RECENT_IP_TTL),
-            ['withscores' => true, 'limit' => [0, self::RECENT_IP_LIMIT]]
-        );
         $online = [];
         foreach (Redis::hgetall(self::PREFIX . $userId) as $field => $timestamp) {
             if ($now - (int) $timestamp <= self::TTL) {
                 $ip = substr($field, strpos($field, ':') + 1);
-                $online[$ip] = true;
-                $recent[$ip] = max((int) ($recent[$ip] ?? 0), (int) $timestamp);
+                $online[$ip] = max((int) ($online[$ip] ?? 0), (int) $timestamp);
             }
         }
-        arsort($recent, SORT_NUMERIC);
+        arsort($online, SORT_NUMERIC);
 
         $result = [];
-        foreach (array_slice($recent, 0, self::RECENT_IP_LIMIT, true) as $ip => $timestamp) {
+        foreach ($online as $ip => $timestamp) {
             $result[] = [
                 'ip' => (string) $ip,
                 'last_seen_at' => (int) $timestamp,
-                'is_online' => isset($online[$ip]),
+                'is_online' => true,
             ];
         }
 
