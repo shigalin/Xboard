@@ -1,0 +1,92 @@
+{
+  "zh-CN": {
+    "usage": {
+      "title": "使用概览",
+      "users": "使用人数",
+      "traffic": "使用流量",
+      "uniqueUsers": "所选期间去重人数",
+      "avgUsers": "日均使用人数：{{count}} 人",
+      "trafficBasis": "上传 + 下载（含节点倍率）",
+      "avgTraffic": "日均使用流量：{{value}}",
+      "people": "{{count}} 人",
+      "dailyUsers": "每日有流量的使用人数",
+      "dailyTraffic": "每日使用流量",
+      "loading": "正在加载使用统计…",
+      "loadError": "使用统计加载失败",
+      "retry": "重试"
+    },
+    "recentIPs": {
+      "title": "最近使用 IP",
+      "description": "节点上报的使用记录，保留最近 24 小时，最多 100 个 IP",
+      "view": "查看 {{email}} 的最近使用 IP",
+      "loading": "正在加载 IP 记录…",
+      "loadError": "IP 记录加载失败",
+      "retry": "重试",
+      "empty": "最近 24 小时暂无节点上报的 IP 记录",
+      "lastSeen": "最近使用时间",
+      "status": "当前状态",
+      "online": "在线",
+      "offline": "离线"
+    }
+  },
+  "en-US": {
+    "usage": {
+      "title": "Usage overview",
+      "users": "Active users",
+      "traffic": "Traffic usage",
+      "uniqueUsers": "Unique users in the selected period",
+      "avgUsers": "Daily average: {{count}} users",
+      "trafficBasis": "Upload + download (including node rates)",
+      "avgTraffic": "Daily average: {{value}}",
+      "people": "{{count}} users",
+      "dailyUsers": "Daily users with traffic",
+      "dailyTraffic": "Daily traffic usage",
+      "loading": "Loading usage statistics…",
+      "loadError": "Unable to load usage statistics",
+      "retry": "Retry"
+    },
+    "recentIPs": {
+      "title": "Recently used IPs",
+      "description": "Node-reported usage from the last 24 hours, up to 100 IPs",
+      "view": "View recently used IPs for {{email}}",
+      "loading": "Loading IP records…",
+      "loadError": "Unable to load IP records",
+      "retry": "Retry",
+      "empty": "No node-reported IP records in the last 24 hours",
+      "lastSeen": "Last used",
+      "status": "Current status",
+      "online": "Online",
+      "offline": "Offline"
+    }
+  },
+  "ru-RU": {
+    "usage": {
+      "title": "Обзор использования",
+      "users": "Активные пользователи",
+      "traffic": "Использованный трафик",
+      "uniqueUsers": "Уникальные пользователи за выбранный период",
+      "avgUsers": "В среднем за день: {{count}} пользователей",
+      "trafficBasis": "Отправлено + получено (с коэффициентом узла)",
+      "avgTraffic": "В среднем за день: {{value}}",
+      "people": "{{count}} пользователей",
+      "dailyUsers": "Пользователи с трафиком за день",
+      "dailyTraffic": "Трафик за день",
+      "loading": "Загрузка статистики…",
+      "loadError": "Не удалось загрузить статистику",
+      "retry": "Повторить"
+    },
+    "recentIPs": {
+      "title": "Последние IP-адреса",
+      "description": "Данные узлов за последние 24 часа, до 100 IP-адресов",
+      "view": "Последние IP-адреса пользователя {{email}}",
+      "loading": "Загрузка IP-адресов…",
+      "loadError": "Не удалось загрузить IP-адреса",
+      "retry": "Повторить",
+      "empty": "Нет данных об IP-адресах за последние 24 часа",
+      "lastSeen": "Последнее использование",
+      "status": "Текущий статус",
+      "online": "В сети",
+      "offline": "Не в сети"
+    }
+  }
+}

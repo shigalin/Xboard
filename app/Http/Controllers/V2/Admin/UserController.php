@@ -10,6 +10,7 @@ use App\Jobs\SendEmailJob;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\AuthService;
+use App\Services\DeviceStateService;
 use App\Services\NodeSyncService;
 use App\Services\Plugin\HookManager;
 use App\Services\UserService;
@@ -223,6 +224,18 @@ class UserController extends Controller
         $user = User::find($request->input('id'))->load('invite_user');
         $user = HookManager::filter('admin.user.detail', $user, $request);
         return $this->success($user);
+    }
+
+    public function getRecentIPs(Request $request, DeviceStateService $devices)
+    {
+        $params = $request->validate([
+            'id' => 'required|integer|min:1',
+        ]);
+        if (!User::whereKey($params['id'])->exists()) {
+            return $this->fail([400202, '用户不存在']);
+        }
+
+        return $this->success($devices->getRecentIPs((int) $params['id']));
     }
 
     public function update(UserUpdate $request)

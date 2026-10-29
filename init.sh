@@ -6,6 +6,11 @@ php composer.phar install -vvv
 git submodule update --init --recursive --force
 php artisan xboard:install
 
+if [ -f scripts/customize-admin.php ]; then
+  php scripts/customize-admin.php \
+    || echo "Warning: admin customization skipped; serving the upstream admin bundle." >&2
+fi
+
 if [ -f "/etc/init.d/bt" ] || [ -f "/.dockerenv" ]; then
   chown -R www:www $(pwd);
 fi

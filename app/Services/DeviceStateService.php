@@ -21,6 +21,9 @@ class DeviceStateService
     private const DB_SYNC_PENDING_KEY = 'device:db_sync_pending';
     private const SEQUENCE_BLOCK_SIZE = 1000000000;
     private const TTL = 300; // device state ttl
+    private const RECENT_IP_PREFIX = 'user_recent_ips:';
+    private const RECENT_IP_TTL = 86400; // 1 day
+    private const RECENT_IP_LIMIT = 100;
     private const INDEX_TTL = 3600;
     // How long a written online_count is trusted before being rewritten even
     // if unchanged. Must stay well under CleanupOnlineStatus's 10-minute
@@ -105,6 +108,9 @@ local ttl = tonumber(ARGV[9])
 local touchTTL = tonumber(ARGV[10])
 local timestamp = ARGV[11]
 local devices = cjson.decode(ARGV[12])
+local recentIPPrefix = ARGV[13]
+local recentIPTTL = tonumber(ARGV[14])
+local recentIPLimit = tonumber(ARGV[15])
 
 local function decimalGreater(left, right)
     if string.len(left) ~= string.len(right) then
@@ -146,9 +152,14 @@ for userId, ips in pairs(devices) do
 
         redis.call('SREM', indexKey, userId)
         if #ips > 0 then
+            local recentIPKey = recentIPPrefix .. userId
             for _, ip in ipairs(ips) do
                 redis.call('HSET', hashKey, nodePrefix .. ip, timestamp)
+                redis.call('ZADD', recentIPKey, timestamp, ip)
             end
+            redis.call('ZREMRANGEBYSCORE', recentIPKey, '-inf', tonumber(timestamp) - recentIPTTL)
+            redis.call('ZREMRANGEBYRANK', recentIPKey, 0, -recentIPLimit - 1)
+            redis.call('EXPIRE', recentIPKey, recentIPTTL)
             redis.call('EXPIRE', hashKey, ttl)
             redis.call('SADD', indexKey, userId)
         end
@@ -458,6 +469,16 @@ LUA;
             Redis::hMset($key, $fields);
             Redis::expire($key, self::TTL);
 
+            $recentKey = self::RECENT_IP_PREFIX . $userId;
+            Redis::pipeline(function ($pipe) use ($recentKey, $ips, $timestamp): void {
+                foreach ($ips as $ip) {
+                    $pipe->zadd($recentKey, $timestamp, $ip);
+                }
+                $pipe->zremrangebyscore($recentKey, '-inf', $timestamp - self::RECENT_IP_TTL);
+                $pipe->zremrangebyrank($recentKey, 0, -self::RECENT_IP_LIMIT - 1);
+                $pipe->expire($recentKey, self::RECENT_IP_TTL);
+            });
+
             $indexKey = self::INDEX_PREFIX . $nodeId;
             Redis::sadd($indexKey, $userId);
             Redis::expire($indexKey, self::INDEX_TTL);
@@ -559,7 +580,10 @@ LUA;
                 (string) self::TTL,
                 (string) self::TOUCH_TTL,
                 $timestamp,
-                json_encode((object) $deviceBatch, JSON_THROW_ON_ERROR)
+                json_encode((object) $deviceBatch, JSON_THROW_ON_ERROR),
+                $redisPrefix . self::RECENT_IP_PREFIX,
+                (string) self::RECENT_IP_TTL,
+                (string) self::RECENT_IP_LIMIT
             );
 
             if (!is_array($batchResult) || (int) ($batchResult[0] ?? 0) !== 1) {
@@ -849,6 +873,38 @@ LUA;
                     $result[$userId] = array_values(array_unique($ips));
                 }
             }
+        }
+
+        return $result;
+    }
+
+    /** Recent node-reported usage IPs, retained independently of online state. */
+    public function getRecentIPs(int $userId): array
+    {
+        $now = time();
+        $recent = Redis::zrevrangebyscore(
+            self::RECENT_IP_PREFIX . $userId,
+            '+inf',
+            '(' . ($now - self::RECENT_IP_TTL),
+            ['withscores' => true, 'limit' => [0, self::RECENT_IP_LIMIT]]
+        );
+        $online = [];
+        foreach (Redis::hgetall(self::PREFIX . $userId) as $field => $timestamp) {
+            if ($now - (int) $timestamp <= self::TTL) {
+                $ip = substr($field, strpos($field, ':') + 1);
+                $online[$ip] = true;
+                $recent[$ip] = max((int) ($recent[$ip] ?? 0), (int) $timestamp);
+            }
+        }
+        arsort($recent, SORT_NUMERIC);
+
+        $result = [];
+        foreach (array_slice($recent, 0, self::RECENT_IP_LIMIT, true) as $ip => $timestamp) {
+            $result[] = [
+                'ip' => (string) $ip,
+                'last_seen_at' => (int) $timestamp,
+                'is_online' => isset($online[$ip]),
+            ];
         }
 
         return $result;

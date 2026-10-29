@@ -13,6 +13,7 @@ use App\Models\Ticket;
 use App\Models\User;
 use App\Services\StatisticalService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 
 class StatController extends Controller
 {
@@ -195,6 +196,56 @@ class StatController extends Controller
                 'summary' => $summary,
             ]
         ];
+    }
+
+    public function getUsage(Request $request)
+    {
+        $request->mergeIfMissing([
+            'start_date' => date('Y-m-d', strtotime('-29 days')),
+            'end_date' => date('Y-m-d'),
+        ]);
+        $params = $request->validate([
+            'start_date' => 'required|date_format:Y-m-d',
+            'end_date' => 'required|date_format:Y-m-d|after_or_equal:start_date',
+        ]);
+
+        $start = Carbon::parse($params['start_date'])->startOfDay();
+        $end = Carbon::parse($params['end_date'])->startOfDay();
+        $query = StatUser::where('record_type', 'd')
+            ->where('record_at', '>=', $start->timestamp)
+            ->where('record_at', '<', $end->copy()->addDay()->timestamp)
+            ->whereRaw('u + d > 0');
+
+        $statistics = (clone $query)
+            ->selectRaw('record_at, COUNT(DISTINCT user_id) as active_users, SUM(u + d) as traffic')
+            ->groupBy('record_at')
+            ->get()
+            ->keyBy('record_at');
+
+        $dailyStats = [];
+        for ($day = $start->copy(); $day->lte($end); $day->addDay()) {
+            $statistic = $statistics->get($day->timestamp);
+            $dailyStats[] = [
+                'date' => $day->format('Y-m-d'),
+                'active_users' => (int) ($statistic?->active_users ?? 0),
+                'traffic' => (int) ($statistic?->traffic ?? 0),
+            ];
+        }
+
+        $traffic = array_sum(array_column($dailyStats, 'traffic'));
+        $days = count($dailyStats);
+
+        return $this->success([
+            'list' => $dailyStats,
+            'summary' => [
+                'start_date' => $params['start_date'],
+                'end_date' => $params['end_date'],
+                'active_users' => (clone $query)->distinct()->count('user_id'),
+                'traffic' => $traffic,
+                'avg_daily_users' => round(array_sum(array_column($dailyStats, 'active_users')) / $days, 2),
+                'avg_daily_traffic' => $traffic / $days,
+            ],
+        ]);
     }
 
     /**
