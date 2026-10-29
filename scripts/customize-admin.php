@@ -28,6 +28,12 @@ try {
     }
     $overview = substr($bundle, $start, $end - $start);
     foreach ([
+        // Keep calendar dates throughout this card. LS/ES can use different
+        // browser UTC offsets on a DST boundary and shift the selected day.
+        ['const n=ES(new Date);', 'const n=XboardUsageToday();'],
+        ['return{startDate:LS(e),endDate:LS(n)}', 'return{startDate:e,endDate:n}'],
+        ['return{startDate:LS(i),endDate:LS(n)}', 'return{startDate:i,endDate:n}'],
+        ['c=e=>_S(ES(e),"yyyy-MM-dd")', 'c=e=>_S(e,"yyyy-MM-dd")'],
         ['H.useState("amount")', 'H.useState("users")'],
         ['{data:d}=pC', '{data:d,isLoading:usageLoading,isError:usageError,refetch:retryUsage}=pC'],
         ['queryKey:["orderStat"', 'queryKey:["usageStat"'],
@@ -41,11 +47,9 @@ try {
         ['value:"amount",children:o("dashboard:overview.amount")', 'value:"users",children:o("dashboard:usage.users")'],
         ['value:"count",children:o("dashboard:overview.count")', 'value:"traffic",children:o("dashboard:usage.traffic")'],
         ['U$t.map(e=>Q.jsx(', 'U$t.filter(e=>["7d","30d","custom"].includes(e.value)).map(e=>Q.jsx('],
-        // available_from is already a calendar date in the application
-        // timezone, so it is used as-is; ES() belongs on instants only, and
-        // shifting a date here moves the day picker's bound by one day for
-        // browsers east of UTC+8.
-        ['captionLayout:"dropdown",numberOfMonths:2', 'captionLayout:"dropdown",numberOfMonths:2,disabled:[{before:d?.summary?.available_from?new Date(d.summary.available_from+"T00:00:00"):bS(ES(new Date),29)},{after:ES(new Date)}]'],
+        // available_from is already a calendar date; bounds use the same
+        // application calendar day as the preset ranges.
+        ['captionLayout:"dropdown",numberOfMonths:2', 'captionLayout:"dropdown",numberOfMonths:2,disabled:[{before:d?.summary?.available_from?new Date(d.summary.available_from+"T00:00:00"):bS(XboardUsageToday(),29)},{after:XboardUsageToday()}]'],
         ['className:"flex items-center justify-between"', 'className:"flex flex-wrap items-center justify-between gap-4"'],
         ['className:"flex items-center gap-2"', 'className:"flex flex-wrap items-center gap-2"'],
         ['className:"flex min-w-0 items-center gap-1"', 'className:"flex min-w-0 flex-wrap items-center gap-1"'],

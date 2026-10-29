@@ -51,9 +51,11 @@ log retention and cleanup schedule are unchanged.
 The lower bound also respects the previous month's final cleanup cutoff, so
 PHP month overflow at a month boundary cannot reopen dates already purged.
 `available_from` is already a calendar date in the application timezone, so the
-day picker uses it as-is. The build script's UTC+8 normalization applies to
-instants only; shifting a date would move the picker's bound by one day for
-browsers east of UTC+8 and let it offer a day the API rejects.
+day picker uses it as-is. Selected calendar dates are formatted directly for
+the API, without an `LS`/`ES` offset round trip across browser DST boundaries.
+Preset ranges and picker bounds derive the application's UTC+8 calendar day
+from UTC fields, avoiding a DST shift near midnight. Preset day counts and
+the shared time-conversion helpers used by other views are unchanged.
 
 Neither view polls on a timer. The upstream card this replaces refetched every
 30 seconds, which suited one row per day of order totals; these daily aggregates

@@ -2,6 +2,13 @@
 // React, query, chart and dialog bindings in the pinned a260c84d admin build.
 // scripts/customize-admin.php checks the upstream bundle before inserting them.
 
+function XboardUsageToday() {
+  // Application time is UTC+8. Read its calendar fields without a browser-DST
+  // offset round trip, then represent that day in the local calendar picker.
+  const date = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
 function XboardUsageSummary({ summary = {} }) {
   const h = H.createElement;
   const { t } = jy('dashboard');
