@@ -60,18 +60,22 @@ class UsageOverviewTest extends TestCase
     public function test_daily_usage_deduplicates_users_across_rates_and_fills_empty_days(): void
     {
         Sanctum::actingAs($this->createUser());
+        $user = $this->createUser(false);
+        $otherUser = $this->createUser(false);
+        $inactiveUser = $this->createUser(false);
+        $monthlyUser = $this->createUser(false);
         $start = Carbon::today()->subDays(2)->format('Y-m-d');
         $middle = Carbon::yesterday()->format('Y-m-d');
         $end = Carbon::today()->format('Y-m-d');
         foreach ([
-            [1, '1.00', $start, 'd', 10, 20],
-            [1, '2.00', $start, 'd', 40, 60],
-            [2, '1.00', $start, 'd', 0, 5],
-            [3, '1.00', $start, 'd', 0, 0],
-            [1, '1.00', $middle, 'd', 2, 3],
-            [4, '1.00', $start, 'm', 1000, 1000],
-            [5, '1.00', Carbon::today()->subDays(3)->format('Y-m-d'), 'd', 1000, 1000],
-            [6, '1.00', Carbon::tomorrow()->format('Y-m-d'), 'd', 1000, 1000],
+            [$user->id, '1.00', $start, 'd', 10, 20],
+            [$user->id, '2.00', $start, 'd', 40, 60],
+            [$otherUser->id, '1.00', $start, 'd', 0, 5],
+            [$inactiveUser->id, '1.00', $start, 'd', 0, 0],
+            [$user->id, '1.00', $middle, 'd', 2, 3],
+            [$monthlyUser->id, '1.00', $start, 'm', 1000, 1000],
+            [$user->id, '1.00', Carbon::today()->subDays(3)->format('Y-m-d'), 'd', 1000, 1000],
+            [$user->id, '1.00', Carbon::tomorrow()->format('Y-m-d'), 'd', 1000, 1000],
         ] as [$userId, $rate, $date, $type, $upload, $download]) {
             StatUser::create([
                 'user_id' => $userId, 'server_rate' => $rate,
@@ -88,6 +92,48 @@ class UsageOverviewTest extends TestCase
         ])->assertJsonPath('data.summary.active_users', 2)
             ->assertJsonPath('data.summary.traffic', 140)
             ->assertJsonPath('data.summary.avg_daily_users', 1);
+    }
+
+    public function test_usage_excludes_all_administrators_from_daily_and_summary_statistics(): void
+    {
+        $admin = $this->createUser();
+        $otherAdmin = $this->createUser();
+        $user = $this->createUser(false);
+        $staff = $this->createUser(false);
+        $staff->update(['is_staff' => true]);
+        Sanctum::actingAs($admin);
+
+        $start = Carbon::today()->subDays(2)->format('Y-m-d');
+        $middle = Carbon::yesterday()->format('Y-m-d');
+        $end = Carbon::today()->format('Y-m-d');
+        foreach ([
+            [$admin->id, '1.00', $start, 1000, 2000],
+            [$admin->id, '2.00', $start, 1000, 2000],
+            [$otherAdmin->id, '1.00', $start, 3000, 4000],
+            [$user->id, '1.00', $start, 10, 20],
+            [$user->id, '2.00', $start, 20, 30],
+            [$staff->id, '1.00', $start, 10, 20],
+            [$user->id, '1.00', $middle, 10, 30],
+            [$otherAdmin->id, '1.00', $middle, 1000, 2000],
+            [$admin->id, '1.00', $end, 1000, 2000],
+            [$otherAdmin->id, '1.00', $end, 3000, 4000],
+        ] as [$userId, $rate, $date, $upload, $download]) {
+            StatUser::create([
+                'user_id' => $userId, 'server_rate' => $rate,
+                'record_at' => Carbon::parse($date)->timestamp, 'record_type' => 'd',
+                'u' => $upload, 'd' => $download,
+            ]);
+        }
+
+        $this->getJson($this->endpoint('stat/getUsage') . '?start_date=' . $start . '&end_date=' . $end)
+            ->assertOk()->assertJsonPath('data.list', [
+                ['date' => $start, 'active_users' => 2, 'traffic' => 110],
+                ['date' => $middle, 'active_users' => 1, 'traffic' => 40],
+                ['date' => $end, 'active_users' => 0, 'traffic' => 0],
+            ])->assertJsonPath('data.summary.active_users', 2)
+            ->assertJsonPath('data.summary.traffic', 150)
+            ->assertJsonPath('data.summary.avg_daily_users', 1)
+            ->assertJsonPath('data.summary.avg_daily_traffic', 50);
     }
 
     public function test_defaults_to_thirty_days_including_today(): void
@@ -169,9 +215,10 @@ class UsageOverviewTest extends TestCase
         Carbon::setTestNow(Carbon::parse('2026-04-30 12:00:00'));
         try {
             Sanctum::actingAs($this->createUser());
+            $user = $this->createUser(false);
             foreach (['2026-03-02', '2026-03-03'] as $date) {
                 StatUser::create([
-                    'user_id' => 1, 'server_rate' => '1.00',
+                    'user_id' => $user->id, 'server_rate' => '1.00',
                     'record_at' => Carbon::parse($date)->timestamp, 'record_type' => 'd',
                     'u' => 10, 'd' => 20,
                 ]);

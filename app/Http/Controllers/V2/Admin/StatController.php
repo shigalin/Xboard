@@ -228,6 +228,7 @@ class StatController extends Controller
         $query = StatUser::where('record_type', 'd')
             ->where('record_at', '>=', $start->timestamp)
             ->where('record_at', '<', $end->copy()->addDay()->timestamp)
+            ->whereNotIn('user_id', User::where('is_admin', true)->select('id'))
             ->whereRaw('u + d > 0');
 
         $statistics = (clone $query)
