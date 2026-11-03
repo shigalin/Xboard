@@ -76,7 +76,15 @@ class ServerService
             }
             $server->password = $server->generateServerPassword($user);
             $server->rate = $server->getCurrentRate();
-            return $server;
+            $clientServer = $server->toArray();
+            // 节点 API 保留完整列表，客户端订阅使用第一个 REALITY SNI。
+            $realityName = data_get($clientServer, 'protocol_settings.reality_settings.server_name');
+            if ((int) data_get($clientServer, 'protocol_settings.tls') === 2
+                && is_string($realityName) && str_contains($realityName, ',')) {
+                $clientServer['protocol_settings']['reality_settings']['server_name'] =
+                    strtolower(rtrim(trim(explode(',', $realityName)[0]), '.'));
+            }
+            return $clientServer;
         })->toArray();
 
         return $servers;

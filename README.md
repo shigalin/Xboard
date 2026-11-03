@@ -43,7 +43,18 @@ docker compose up -d
 > 🚨 **Important:** This version involves significant changes. Please strictly follow the upgrade documentation and backup your database before upgrading. Note that upgrading and migration are different processes, do not confuse them.
 
 ### Development Guides
+
 - [Plugin Development Guide](./docs/en/development/plugin-development-guide.md) - Complete guide for developing XBoard plugins
+
+### Xray REALITY multiple SNI names
+
+In the existing REALITY camouflage domain/SNI field, enter domains separated by
+ASCII commas, for example `site.example.com,www.apple.com`. Enter one shared
+camouflage port, for example `443`. Updated xboard-node with the Xray kernel
+reads the full list and selects the corresponding domain and port from the
+client's SNI. Subscriptions use the first domain by default. Upgrade both the
+panel and xboard-node before enabling this; sing-box nodes do not support the
+comma-separated field.
 
 ### Deployment Guides
 
