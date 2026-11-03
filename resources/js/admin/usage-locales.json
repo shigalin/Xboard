@@ -28,6 +28,24 @@
       "status": "当前状态",
       "online": "在线",
       "offline": "离线"
+    },
+    "nodeTraffic": {
+      "title": "节点流量明细",
+      "view": "查看 {{email}} 的节点流量",
+      "description": "当前流量周期；上传和下载为实际流量，顶部用量汇总包含节点倍率",
+      "loading": "正在加载节点流量…",
+      "loadError": "节点流量加载失败",
+      "retry": "重试",
+      "empty": "当前周期暂无节点明细，收到新的流量上报后会显示",
+      "used": "当前已用：{{value}}",
+      "attributed": "已记录节点流量：{{value}}",
+      "recordedFrom": "本周期明细开始记录于 {{date}}",
+      "unattributed": "尚有 {{value}} 无法归属到节点（启用明细前的流量或手动调整的用量）。历史明细无法补回。",
+      "inconsistent": "节点明细与当前已用流量不一致，可能存在直接修改用量数据的情况。",
+      "node": "节点",
+      "upload": "实际上传",
+      "download": "实际下载",
+      "deleted": "已删除"
     }
   },
   "en-US": {
@@ -59,6 +77,24 @@
       "status": "Current status",
       "online": "Online",
       "offline": "Offline"
+    },
+    "nodeTraffic": {
+      "title": "Traffic by node",
+      "view": "View node traffic for {{email}}",
+      "description": "Current traffic cycle. Upload and download show raw traffic; the usage totals above include node rates.",
+      "loading": "Loading node traffic…",
+      "loadError": "Unable to load node traffic",
+      "retry": "Retry",
+      "empty": "No node details for this cycle yet. New traffic reports will appear here.",
+      "used": "Current usage: {{value}}",
+      "attributed": "Recorded node usage: {{value}}",
+      "recordedFrom": "Details for this cycle recorded from {{date}}",
+      "unattributed": "{{value}} cannot be attributed to nodes (usage before recording began or manually adjusted counters). Historical details cannot be recovered.",
+      "inconsistent": "Node details differ from current usage. Counters may have been changed directly.",
+      "node": "Node",
+      "upload": "Raw upload",
+      "download": "Raw download",
+      "deleted": "Deleted"
     }
   },
   "ru-RU": {
@@ -90,6 +126,24 @@
       "status": "Текущий статус",
       "online": "В сети",
       "offline": "Не в сети"
+    },
+    "nodeTraffic": {
+      "title": "Трафик по узлам",
+      "view": "Трафик по узлам для {{email}}",
+      "description": "Текущий период. Отправленный и полученный трафик указан без коэффициента; итоговые значения выше включают коэффициенты узлов.",
+      "loading": "Загрузка трафика…",
+      "loadError": "Не удалось загрузить трафик",
+      "retry": "Повторить",
+      "empty": "За этот период данных по узлам пока нет. Они появятся после новых отчётов.",
+      "used": "Использовано: {{value}}",
+      "attributed": "Учтено по узлам: {{value}}",
+      "recordedFrom": "Данные за этот период записываются с {{date}}",
+      "unattributed": "{{value}} невозможно распределить по узлам (трафик до начала записи или ручное изменение счётчиков). Старые данные восстановить нельзя.",
+      "inconsistent": "Данные по узлам не совпадают с текущим расходом. Возможно, счётчики были изменены напрямую.",
+      "node": "Узел",
+      "upload": "Отправлено",
+      "download": "Получено",
+      "deleted": "Удалён"
     }
   }
 }

@@ -1,4 +1,4 @@
-# Usage overview and online IPs
+# Usage overview, online IPs and node traffic
 
 The upstream `.gitmodules` points to `cedar2025/xboard-admin-dist`, which only
 contains compiled admin assets. This checkout pins build `a260c84d` (dist commit
@@ -76,3 +76,46 @@ history, refresh the TTL, remove stale fields or change device state. Device
 reporting, counting, sequence fences, alive lists and node synchronization
 remain as they were before the IP-view feature. Previously written history
 keys are no longer read or refreshed and expire under their existing TTL.
+
+## User traffic by node
+
+Clicking a user's used-traffic cell opens `GET
+/api/v2/{secure_path}/user/getNodeTraffic?id=...` (admin only). It shows current
+cycle traffic by node, ordered by billed usage. The table shows only the node
+name and raw upload/download bytes. Summary totals reflect the rate when each
+report was processed, including time-dependent and zero rates.
+Renamed nodes use their current name; deleted
+nodes retain their last reported name and ID.
+
+Migration `2026_11_03_000001_create_user_server_traffic_table` adds one aggregate
+row per user/node in `v2_user_server_traffic`. There is no per-report history or
+date-range query: these rows describe the same cycle as the user's counters,
+including annual and non-resetting plans. The existing two-month daily-stat
+cleanup does not remove them. Deleting a user cascades to these rows.
+
+`TrafficFetchJob` writes the counters and detail in one transaction, locking the
+user row. Each transaction starts with a write to that row, so SQLite waits for
+its writer lock instead of failing a read-to-write upgrade when several workers
+report at once. On SQLite 3.35+ the counters are read through `UPDATE ...
+RETURNING`, which holds the database-wide writer lock for fewer statements;
+elsewhere a no-op write (`u = u`) takes the row lock, which MySQL does without
+logging an extra binlog row image. Resets and admin user saves begin their
+transactions with the same no-op write. The detail row is incremented in one
+statement and created only on a user's first report from a node in the cycle.
+The billed delta is read back from the updated counters to preserve
+the database's existing fractional-rate rounding. This adds database work per
+reported user. Resets take the same lock and clear detail in the transaction;
+manual edits to counters clear attribution only if a counter actually changes.
+The query takes a shared user lock so totals and detail describe one snapshot.
+Node software and its reporting protocol are unchanged.
+
+Pre-existing usage cannot be reconstructed. The dialog displays the difference
+between current usage and recorded node usage as unattributed, including manual
+counter adjustments. Direct database/plugin counter edits that bypass these
+paths cannot preserve attribution; an excess of detail over the counters is
+explicitly flagged. Opening the dialog fetches fresh data without polling and
+hides old cached totals during the fetch.
+
+Deploy the migration before restarting queue workers on the new code, then run
+the admin customization script (the existing update/build scripts do this).
+Old workers do not record node detail, so their traffic remains unattributed.

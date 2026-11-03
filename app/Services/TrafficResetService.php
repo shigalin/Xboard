@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\User;
 use App\Models\Plan;
 use App\Models\TrafficResetLog;
+use App\Models\UserServerTraffic;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -35,9 +36,22 @@ class TrafficResetService
   {
     try {
       return DB::transaction(function () use ($user, $triggerSource) {
-        $oldUpload = $user->u ?? 0;
-        $oldDownload = $user->d ?? 0;
+        // Start with a no-op write, as TrafficFetchJob does, so SQLite waits
+        // for its writer lock while nodes report traffic.
+        User::whereKey($user->id)->toBase()->update(['u' => DB::raw('u')]);
+        // Do not refresh the caller's model: order/gift flows may have pending
+        // plan changes. Only read the counters under the accounting lock.
+        $current = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+        $oldUpload = $current->u ?? 0;
+        $oldDownload = $current->d ?? 0;
         $oldTotal = $oldUpload + $oldDownload;
+
+        // A stale model can still contain zero counters while the database has
+        // new traffic; make the reset dirty against the locked database values.
+        foreach (['u', 'd', 'reset_count'] as $field) {
+          $user->setAttribute($field, $current->getAttribute($field));
+        }
+        $user->syncOriginalAttributes(['u', 'd', 'reset_count']);
 
         $nextResetTime = $this->calculateNextResetTime($user);
 
@@ -45,9 +59,11 @@ class TrafficResetService
           'u' => 0,
           'd' => 0,
           'last_reset_at' => time(),
-          'reset_count' => $user->reset_count + 1,
+          'reset_count' => $current->reset_count + 1,
           'next_reset_at' => $nextResetTime ? $nextResetTime->timestamp : null,
         ]);
+
+        UserServerTraffic::where('user_id', $user->id)->delete();
 
         $this->recordResetLog($user, [
           'reset_type' => $this->getResetTypeFromPlan($user->plan),

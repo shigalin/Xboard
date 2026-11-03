@@ -9,6 +9,7 @@ use App\Http\Requests\Admin\UserUpdate;
 use App\Jobs\SendEmailJob;
 use App\Models\Plan;
 use App\Models\User;
+use App\Models\UserServerTraffic;
 use App\Services\AuthService;
 use App\Services\DeviceStateService;
 use App\Services\NodeSyncService;
@@ -238,6 +239,47 @@ class UserController extends Controller
         return $this->success($devices->getOnlineIPs((int) $params['id']));
     }
 
+    public function getNodeTraffic(Request $request)
+    {
+        $params = $request->validate(['id' => 'required|integer|min:1']);
+
+        return DB::transaction(function () use ($params) {
+            // Keep the totals and breakdown in one snapshot, including resets.
+            $user = User::whereKey($params['id'])->sharedLock()->first();
+            if (!$user) {
+                return $this->fail([400202, '用户不存在']);
+            }
+
+            $records = UserServerTraffic::query()
+                ->leftJoin('v2_server as server', 'server.id', '=', 'v2_user_server_traffic.server_id')
+                ->where('user_id', $user->id)
+                ->select('v2_user_server_traffic.*', 'server.name as current_name', 'server.id as current_id')
+                ->orderByRaw('billed_u + billed_d DESC')->orderBy('server_id')->get();
+            $list = $records->map(fn ($record) => [
+                'server_id' => (int) $record->server_id,
+                'server_name' => $record->current_name ?? $record->server_name,
+                'deleted' => $record->current_id === null,
+                'upload' => $record->u + 0,
+                'download' => $record->d + 0,
+                'billed' => $record->billed_u + $record->billed_d,
+            ]);
+            $used = $user->u + $user->d;
+            $attributed = $list->sum('billed');
+
+            return $this->success([
+                'list' => $list,
+                'summary' => [
+                    'total_used' => $used,
+                    'attributed_total' => $attributed,
+                    'unattributed_total' => max(0, $used - $attributed),
+                    'inconsistent' => $attributed > $used,
+                    'recorded_from' => $records->min('created_at')?->timestamp,
+                    'last_reset_at' => $user->last_reset_at,
+                ],
+            ]);
+        });
+    }
+
     public function update(UserUpdate $request)
     {
         $params = $request->validated();
@@ -293,7 +335,24 @@ class UserController extends Controller
         ]);
 
         try {
-            $user->update($params);
+            DB::transaction(function () use ($user, $params) {
+                // Start with a no-op write, as TrafficFetchJob does, so SQLite
+                // waits for its writer lock while nodes report traffic.
+                User::whereKey($user->id)->toBase()->update(['u' => DB::raw('u')]);
+                $current = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+                // Manually replacing counters has no node attribution. Start a
+                // fresh breakdown only when the submitted counters really change.
+                $trafficChanged = (isset($params['u']) && $params['u'] != $current->u)
+                    || (isset($params['d']) && $params['d'] != $current->d);
+                foreach (['u', 'd'] as $field) {
+                    $user->setAttribute($field, $current->getAttribute($field));
+                }
+                $user->syncOriginalAttributes(['u', 'd']);
+                $user->update($params);
+                if ($trafficChanged) {
+                    UserServerTraffic::where('user_id', $user->id)->delete();
+                }
+            });
         } catch (\Exception $e) {
             Log::error($e);
             return $this->fail([500, '保存失败']);

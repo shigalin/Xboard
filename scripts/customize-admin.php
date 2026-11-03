@@ -78,13 +78,22 @@ try {
     $bundle = substr($bundle, 0, $devicesStart)
         . 'cell:({row:e})=>Q.jsx(XboardUserDevices,{user:e.original,t:r})' . substr($bundle, $devicesEnd + 1);
 
+    $trafficStart = strpos($bundle, 'cell:({row:e})=>{const t=RS(e.original?.total_used),');
+    $trafficEnd = $trafficStart === false ? false : strpos($bundle, '},{accessorKey:"transfer_enable"', $trafficStart);
+    if ($trafficStart === false || $trafficEnd === false) {
+        throw new RuntimeException('User traffic cell not found.');
+    }
+    $bundle = substr($bundle, 0, $trafficStart)
+        . 'cell:({row:e})=>Q.jsx(XboardNodeTraffic,{user:e.original})' . substr($bundle, $trafficEnd);
+
     $translations = file_get_contents($root . '/resources/js/admin/usage-locales.json');
     json_decode($translations, true, 512, JSON_THROW_ON_ERROR);
     $localeSetup = "for (const [language, additions] of Object.entries({$translations})) {\n"
         . "  const resources = window.XBOARD_TRANSLATIONS?.[language];\n"
         . "  if (!resources) continue;\n"
         . "  resources.dashboard.usage = additions.usage;\n"
-        . "  resources.user.onlineIPs = additions.onlineIPs;\n}\n";
+        . "  resources.user.onlineIPs = additions.onlineIPs;\n"
+        . "  resources.user.nodeTraffic = additions.nodeTraffic;\n}\n";
     $components = file_get_contents($root . '/resources/js/admin/usage-components.js');
     $output = $localeSetup . $bundle . "\n" . $components;
     $file = 'assets/index-usage-' . substr(hash('sha256', $output), 0, 12) . '.js';

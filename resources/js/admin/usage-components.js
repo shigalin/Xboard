@@ -150,3 +150,80 @@ function XboardOnlineIPs({ user, children, className }) {
     )
   );
 }
+
+function XboardNodeTraffic({ user }) {
+  const h = H.createElement;
+  const { t } = jy('user');
+  const mobile = p8e();
+  const [open, setOpen] = H.useState(false);
+  const focusTitle = H.useCallback((element) => element?.focus(), []);
+  const { data, isFetching, isError, refetch } = pC({
+    queryKey: ['userNodeTraffic', user.id],
+    queryFn: async () => {
+      const response = await IL(OL() + '/user/getNodeTraffic', { params: { id: user.id } });
+      return response.data;
+    },
+    enabled: open,
+    staleTime: 0,
+  });
+  const percent = user.transfer_enable > 0 ? (user.total_used / user.transfer_enable) * 100 : 0;
+  let content;
+  // Hide old cached totals while reopening, especially after a traffic reset.
+  if (isFetching) content = h('p', { className: 'py-8 text-center text-muted-foreground', role: 'status' }, t('nodeTraffic.loading'));
+  else if (isError) content = h('div', { className: 'space-y-4 py-8 text-center', role: 'alert' },
+    h('p', null, t('nodeTraffic.loadError')),
+    h(xtt, { variant: 'outline', onClick: () => refetch() }, t('nodeTraffic.retry')));
+  else if (data) {
+    const summary = data.summary;
+    content = h('div', { className: 'space-y-4' },
+      h('div', { className: 'flex flex-wrap gap-4 text-sm' },
+        h('span', null, t('nodeTraffic.used', { value: RS(summary.total_used) })),
+        h('span', null, t('nodeTraffic.attributed', { value: RS(summary.attributed_total) }))),
+      summary.recorded_from ? h('p', { className: 'text-xs text-muted-foreground' },
+        t('nodeTraffic.recordedFrom', { date: SS(summary.recorded_from) })) : null,
+      summary.unattributed_total > 0 ? h('p', { className: 'rounded-md border p-3 text-sm', role: 'note' },
+        t('nodeTraffic.unattributed', { value: RS(summary.unattributed_total) })) : null,
+      summary.inconsistent ? h('p', { className: 'text-sm text-destructive', role: 'alert' }, t('nodeTraffic.inconsistent')) : null,
+      !data.list.length ? h('p', { className: 'py-8 text-center text-muted-foreground' }, t('nodeTraffic.empty'))
+        : h('div', { style: { maxHeight: 'min(60vh, 480px)', overflow: 'auto' } },
+          h('table', { className: 'w-full text-sm' },
+            h('thead', null, h('tr', { className: 'border-b text-left text-muted-foreground' },
+              ...['node', 'upload', 'download'].map((key) => h('th', { key, className: 'whitespace-nowrap p-3' }, t('nodeTraffic.' + key))))),
+            h('tbody', null, ...data.list.map((record) => h('tr', { key: record.server_id, className: 'border-b' },
+              h('td', { className: 'p-3', style: { minWidth: '160px', overflowWrap: 'anywhere' } },
+                record.server_name, h('span', { className: 'ml-2 text-xs text-muted-foreground' },
+                  '#' + record.server_id + (record.deleted ? ' · ' + t('nodeTraffic.deleted') : ''))),
+              h('td', { className: 'whitespace-nowrap p-3' }, RS(record.upload)),
+              h('td', { className: 'whitespace-nowrap p-3' }, RS(record.download))
+            )))))
+    );
+  }
+
+  return h(htt, { open, onOpenChange: setOpen },
+    h(gtt, { asChild: true }, h('button', {
+      type: 'button',
+      className: 'w-full space-y-1 rounded text-left hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+      title: t('nodeTraffic.title'),
+      'aria-label': t('nodeTraffic.view', { email: user.email }),
+      onClick: (event) => {
+        event.stopPropagation();
+        event.currentTarget.blur();
+      },
+    },
+    h('span', { className: 'flex justify-between gap-2 text-sm' },
+      h('span', { className: 'underline decoration-dotted underline-offset-4' }, RS(user.total_used)),
+      h('span', { className: 'text-xs text-muted-foreground' }, percent.toFixed(1) + '%')),
+    h('span', { className: 'block h-1.5 w-full rounded-full bg-secondary' },
+      h('span', { className: Im('block h-full rounded-full transition-all', percent > 90 ? 'bg-destructive' : 'bg-primary'),
+        style: { width: Math.max(0, Math.min(percent, 100)) + '%' } })))),
+    h(ptt, { className: 'max-w-2xl', style: { maxHeight: '90vh', overflowY: 'auto' } },
+      h(mtt, null,
+        h(_tt, { ref: focusTitle, tabIndex: -1, className: 'outline-none' }, t('nodeTraffic.title')),
+        h(vtt, { className: 'break-all text-sm text-muted-foreground' }, user.email + ' · ' + t('nodeTraffic.description'))),
+      h('div', { className: 'space-y-4', style: { minWidth: 0, padding: mobile ? '0 16px 16px' : undefined } },
+        content,
+        h('div', { className: 'flex justify-end' },
+          h(xtt, { variant: 'outline', onClick: () => setOpen(false) }, t('common:close'))))
+    )
+  );
+}
