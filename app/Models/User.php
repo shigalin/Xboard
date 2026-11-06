@@ -9,6 +9,10 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Query\Builder as QueryBuilder;
+use Symfony\Polyfill\Intl\Idn\Idn;
+use Symfony\Polyfill\Intl\Normalizer\Normalizer;
+use Symfony\Polyfill\Mbstring\Mbstring;
 
 /**
  * App\Models\User
@@ -78,7 +82,7 @@ class User extends Authenticatable
         'next_reset_at' => 'timestamp',
         'last_reset_at' => 'timestamp',
     ];
-    protected $hidden = ['password'];
+    protected $hidden = ['password', 'email_search'];
 
     public const COMMISSION_TYPE_SYSTEM = 0;
     public const COMMISSION_TYPE_PERIOD = 1;
@@ -86,16 +90,82 @@ class User extends Authenticatable
     protected function email(): Attribute
     {
         return Attribute::make(
-            set: fn (string $value) => strtolower(trim($value)),
+            set: function (string $value): array {
+                $email = self::normalizeEmail($value);
+                return ['email' => $email, 'email_search' => self::searchableEmail($email)];
+            },
         );
     }
 
     /**
-     * 按邮箱查询（大小写不敏感，兼容所有数据库）
+     * Normalize an email consistently for storage, lookup and cache keys.
+     */
+    public static function normalizeEmail(string $email): string
+    {
+        $email = trim($email);
+        $email = Normalizer::normalize($email, Normalizer::FORM_C) ?: $email;
+
+        $at = strrpos($email, '@');
+        if ($at === false) {
+            return Mbstring::mb_strtolower($email, 'UTF-8');
+        }
+
+        // Use the locked Unicode tables, even when native extensions exist.
+        // PHP 8.3 changed native lowercasing of Greek final sigma.
+        $local = Mbstring::mb_strtolower(substr($email, 0, $at), 'UTF-8');
+        $local = Normalizer::normalize($local, Normalizer::FORM_C) ?: $local;
+
+        return $local . '@' . self::normalizeEmailDomain(substr($email, $at + 1));
+    }
+
+    public static function normalizeEmailDomain(string $domain): string
+    {
+        $domain = trim($domain);
+        $asciiDomain = Idn::idn_to_ascii(
+            $domain,
+            IDNA_USE_STD3_RULES | IDNA_CHECK_BIDI | IDNA_CHECK_CONTEXTJ | IDNA_NONTRANSITIONAL_TO_ASCII,
+            INTL_IDNA_VARIANT_UTS46
+        );
+
+        return $asciiDomain === false ? Mbstring::mb_strtolower($domain, 'UTF-8') : strtolower($asciiDomain);
+    }
+
+    public static function searchableEmail(string $email): string
+    {
+        $email = self::normalizeEmail($email);
+        $at = strrpos($email, '@');
+        if ($at === false) {
+            return $email;
+        }
+
+        $domain = substr($email, $at + 1);
+        $unicode = Idn::idn_to_utf8($domain, IDNA_NONTRANSITIONAL_TO_UNICODE, INTL_IDNA_VARIANT_UTS46);
+        return substr($email, 0, $at + 1) . ($unicode === false ? $domain : $unicode);
+    }
+
+    public static function applyEmailSearch(Builder|QueryBuilder $query, string $value, bool $negated = false): void
+    {
+        $escape = static fn (string $text) => '%' . str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $text) . '%';
+        $patterns = [
+            'email' => $escape(self::normalizeEmail($value)),
+            'email_search' => $escape(self::searchableEmail($value)),
+        ];
+        $query->where(function ($query) use ($patterns, $negated) {
+            $operator = $negated ? 'NOT LIKE' : 'LIKE';
+            foreach ($patterns as $column => $pattern) {
+                $sql = $query->getGrammar()->wrap($column) . " {$operator} ? ESCAPE '!'";
+                $method = !$negated && $column === 'email_search' ? 'orWhereRaw' : 'whereRaw';
+                $query->{$method}($sql, [$pattern]);
+            }
+        });
+    }
+
+    /**
+     * Query by the canonical email identity.
      */
     public function scopeByEmail(Builder $query, string $email): Builder
     {
-        return $query->where('email', strtolower(trim($email)));
+        return $query->where('email', self::normalizeEmail($email));
     }
 
     // 获取邀请人信息

@@ -24,6 +24,7 @@ use Illuminate\Http\JsonResponse;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 class UserController extends Controller
 {
@@ -89,9 +90,16 @@ class UserController extends Controller
             }
             [$relation, $relationField] = explode('.', $field);
             $query->whereHas($relation, function ($q) use ($relationField, $value) {
+                if ($relationField === 'email' && !is_array($value)) {
+                    $this->applyEmailFilter($q, (string) $value);
+                    return;
+                }
                 if (is_array($value)) {
-                    $q->whereIn($relationField, $value);
-                } else if (is_string($value) && str_contains($value, ':')) {
+                    $values = $relationField === 'email'
+                        ? array_map(static fn ($value) => User::normalizeEmail((string) $value), $value)
+                        : $value;
+                    $q->whereIn($relationField, $values);
+                } elseif (is_string($value) && str_contains($value, ':')) {
                     [$operator, $filterValue] = explode(':', $value, 2);
                     $this->applyQueryCondition($q, $relationField, $operator, $filterValue);
                 } else {
@@ -101,9 +109,17 @@ class UserController extends Controller
             return;
         }
 
+        if ($field === 'email' && !is_array($value)) {
+            $this->applyEmailFilter($query, (string) $value);
+            return;
+        }
+
         // 处理数组值的 'in' 操作
         if (is_array($value)) {
-            $query->whereIn($field === 'group_ids' ? 'group_id' : $field, $value);
+            $values = $field === 'email'
+                ? array_map(static fn ($value) => User::normalizeEmail((string) $value), $value)
+                : $value;
+            $query->whereIn($field === 'group_ids' ? 'group_id' : $field, $values);
             return;
         }
 
@@ -129,6 +145,17 @@ class UserController extends Controller
         };
 
         $this->applyQueryCondition($query, $queryField, $operator, $filterValue);
+    }
+
+    private function applyEmailFilter(Builder|QueryBuilder $query, string $value): void
+    {
+        [$operator, $keyword] = str_contains($value, ':') ? explode(':', $value, 2) : ['like', $value];
+        $queryOperator = $this->getQueryOperator($operator);
+        if (in_array($queryOperator, ['like', 'not like'], true)) {
+            User::applyEmailSearch($query, $keyword, $queryOperator === 'not like');
+            return;
+        }
+        $this->applyQueryCondition($query, 'email', $operator, User::normalizeEmail($keyword));
     }
 
     // Apply sorting rules to the query builder.
@@ -280,6 +307,40 @@ class UserController extends Controller
         });
     }
 
+    public function setInviteUser(Request $request)
+    {
+        $data = $request->validate([
+            'id' => 'required|integer|exists:App\\Models\\User,id',
+            'invite_user_id' => 'nullable|integer|different:id|exists:App\\Models\\User,id',
+        ]);
+        return DB::transaction(function () use ($data) {
+            if (DB::getDriverName() === 'sqlite') {
+                User::whereKey($data['id'])->toBase()->update(['invite_user_id' => DB::raw('invite_user_id')]);
+            }
+            $user = User::whereKey($data['id'])->lockForUpdate()->firstOrFail();
+            $parent = $data['invite_user_id'] ?? null;
+            $this->validateInviteUser($user, $parent);
+            $user->update(['invite_user_id' => $parent]);
+            return $this->success(true);
+        }, 5);
+    }
+
+    private function validateInviteUser(User $user, ?int $parent): void
+    {
+        $visited = [(int) $user->id];
+        for ($cursor = $parent; $cursor;) {
+            if (in_array((int) $cursor, $visited, true)) {
+                throw ValidationException::withMessages(['invite_user_email' => '邀请关系不能形成循环']);
+            }
+            $visited[] = (int) $cursor;
+            $ancestor = User::whereKey($cursor)->lockForUpdate()->first();
+            if (!$ancestor) {
+                throw ValidationException::withMessages(['invite_user_email' => '邀请用户不存在']);
+            }
+            $cursor = $ancestor->invite_user_id;
+        }
+    }
+
     public function update(UserUpdate $request)
     {
         $params = $request->validated();
@@ -289,7 +350,8 @@ class UserController extends Controller
             return $this->fail([400202, '用户不存在']);
         }
         if (isset($params['email'])) {
-            if (User::byEmail($params['email'])->first() && $user->email !== $params['email']) {
+            $existingUser = User::byEmail($params['email'])->first();
+            if ($existingUser && $existingUser->id !== $user->id) {
                 return $this->fail([400201, '邮箱已被使用']);
             }
         }
@@ -309,10 +371,18 @@ class UserController extends Controller
             $params['group_id'] = $plan->group_id;
         }
         // 处理邀请用户
-        if ($request->input('invite_user_email') && $inviteUser = User::byEmail($request->input('invite_user_email'))->first()) {
-            $params['invite_user_id'] = $inviteUser->id;
-        } else {
-            $params['invite_user_id'] = null;
+        if (array_key_exists('invite_user_email', $params)) {
+            $inviteEmail = $params['invite_user_email'];
+            unset($params['invite_user_email']);
+            if ($inviteEmail === null || trim($inviteEmail) === '') {
+                $params['invite_user_id'] = null;
+            } else {
+                $inviteUser = User::byEmail($inviteEmail)->first();
+                if (!$inviteUser) {
+                    return $this->fail([422, '邀请用户不存在']);
+                }
+                $params['invite_user_id'] = $inviteUser->id;
+            }
         }
 
         if (isset($params['banned']) && (int) $params['banned'] === 1) {
@@ -340,6 +410,9 @@ class UserController extends Controller
                 // waits for its writer lock while nodes report traffic.
                 User::whereKey($user->id)->toBase()->update(['u' => DB::raw('u')]);
                 $current = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+                if (array_key_exists('invite_user_id', $params)) {
+                    $this->validateInviteUser($current, $params['invite_user_id']);
+                }
                 // Manually replacing counters has no node attribution. Start a
                 // fresh breakdown only when the submitted counters really change.
                 $trafficChanged = (isset($params['u']) && $params['u'] != $current->u)
@@ -352,7 +425,9 @@ class UserController extends Controller
                 if ($trafficChanged) {
                     UserServerTraffic::where('user_id', $user->id)->delete();
                 }
-            });
+            }, 5);
+        } catch (ValidationException $e) {
+            throw $e;
         } catch (\Exception $e) {
             Log::error($e);
             return $this->fail([500, '保存失败']);
@@ -470,7 +545,7 @@ class UserController extends Controller
             }
             
             // Single user generation with email_prefix
-            $email = $request->input('email_prefix') . '@' . $request->input('email_suffix');
+            $email = User::normalizeEmail($request->input('email_prefix') . '@' . $request->input('email_suffix'));
 
             if (User::byEmail($email)->exists()) {
                 return $this->fail([400201, '邮箱已存在于系统中']);
@@ -501,7 +576,7 @@ class UserController extends Controller
         $usersData = [];
 
         for ($i = 0; $i < $request->input('generate_count'); $i++) {
-            $email = Helper::randomChar(6) . '@' . $request->input('email_suffix');
+            $email = User::normalizeEmail(Helper::randomChar(6) . '@' . $request->input('email_suffix'));
             $usersData[] = [
                 'email' => $email,
                 'password' => $request->input('password') ?? $email,
@@ -576,15 +651,15 @@ class UserController extends Controller
 
         // Check if any of the emails with prefix already exist
         for ($i = 1; $i <= $generateCount; $i++) {
-            $email = $emailPrefix . '_' . $i . '@' . $emailSuffix;
-            if (User::where('email', $email)->exists()) {
+            $email = User::normalizeEmail($emailPrefix . '_' . $i . '@' . $emailSuffix);
+            if (User::byEmail($email)->exists()) {
                 return $this->fail([400201, '邮箱 ' . $email . ' 已存在于系统中']);
             }
         }
 
         // Generate user data for batch creation
         for ($i = 1; $i <= $generateCount; $i++) {
-            $email = $emailPrefix . '_' . $i . '@' . $emailSuffix;
+            $email = User::normalizeEmail($emailPrefix . '_' . $i . '@' . $emailSuffix);
             $usersData[] = [
                 'email' => $email,
                 'password' => $request->input('password') ?? $email,
@@ -744,9 +819,21 @@ class UserController extends Controller
         } // all: ignore filter/sort
 
         try {
-            $builder->update([
-                'banned' => 1
-            ]);
+            DB::transaction(function () use ($builder): void {
+                // Acquire SQLite's writer lock before reading the user IDs,
+                // so concurrent node reports cannot invalidate the snapshot.
+                if (DB::getDriverName() === 'sqlite') {
+                    $builder->toBase()->update(['banned' => DB::raw('banned')]);
+                }
+                $ids = (clone $builder)->reorder()->lockForUpdate()->pluck('id');
+                foreach ($ids->chunk(500) as $chunk) {
+                    // Do not reevaluate a moving filter under READ COMMITTED:
+                    // the ban and token revocation must affect identical IDs.
+                    User::whereKey($chunk)->update(['banned' => 1]);
+                    \Laravel\Sanctum\PersonalAccessToken::where('tokenable_type', (new User())->getMorphClass())
+                        ->whereIn('tokenable_id', $chunk)->delete();
+                }
+            });
         } catch (\Exception $e) {
             Log::error($e);
             return $this->fail([500, '处理失败']);

@@ -20,11 +20,12 @@ services:
     volumes:
       - ./.docker/caddy/Caddyfile.split:/etc/caddy/Caddyfile:ro
 
-  web:
+  updater:
     image: ghcr.io/shigalin/xboard:latest
-    restart: unless-stopped
+    restart: "no"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     volumes: &shared-volumes
       - ./.env:/www/.env
       - ./.docker/.data/:/www/.docker/.data
@@ -33,6 +34,30 @@ services:
       - ./plugins:/www/plugins
     environment:
       docker: "true"
+      ENABLE_AUTO_UPDATE: "false"
+      ENABLE_CADDY: "false"
+      ENABLE_WEB: "false"
+      ENABLE_HORIZON: "false"
+      ENABLE_WS_SERVER: "false"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -s /www/.env ] && grep -qE '^INSTALLED=(1|true)$$' /www/.env; then
+          exec php /www/artisan xboard:update --no-interaction
+        fi
+        echo "[updater] Skipping update before installation."
+
+  web:
+    image: ghcr.io/shigalin/xboard:latest
+    restart: unless-stopped
+    depends_on:
+      updater:
+        condition: service_completed_successfully
+    volumes: *shared-volumes
+    environment:
+      docker: "true"
+      ENABLE_AUTO_UPDATE: "false"
       ENABLE_CADDY: "false"
       ENABLE_HORIZON: "false"
       ENABLE_WS_SERVER: "false"
@@ -41,10 +66,12 @@ services:
     image: ghcr.io/shigalin/xboard:latest
     restart: unless-stopped
     depends_on:
-      - redis
+      updater:
+        condition: service_completed_successfully
     volumes: *shared-volumes
     environment:
       docker: "true"
+      ENABLE_AUTO_UPDATE: "false"
       ENABLE_CADDY: "false"
       ENABLE_WEB: "false"
       ENABLE_WS_SERVER: "false"
@@ -53,10 +80,12 @@ services:
     image: ghcr.io/shigalin/xboard:latest
     restart: unless-stopped
     depends_on:
-      - redis
+      updater:
+        condition: service_completed_successfully
     volumes: *shared-volumes
     environment:
       docker: "true"
+      ENABLE_AUTO_UPDATE: "false"
       ENABLE_CADDY: "false"
       ENABLE_WEB: "false"
       ENABLE_HORIZON: "false"
@@ -66,6 +95,11 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: redis-server --unixsocket /data/redis.sock --unixsocketperm 777 --save 900 1 --save 300 10 --save 60 10000
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     volumes:
       - redis-data:/data
 

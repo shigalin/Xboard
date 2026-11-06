@@ -3,6 +3,7 @@
 namespace App\Utils;
 
 use App\Services\Plugin\HookManager;
+use App\Models\User;
 use Illuminate\Support\Arr;
 
 class Helper
@@ -93,13 +94,22 @@ class Helper
 
     public static function emailSuffixVerify($email, $suffixs)
     {
-        $suffix = preg_split('/@/', $email)[1];
-        if (!$suffix) return false;
-        if (!is_array($suffixs)) {
-            $suffixs = preg_split('/,/', $suffixs);
+        $suffix = substr(strrchr($email, '@') ?: '', 1);
+        if (!$suffix) {
+            return false;
         }
-        if (!in_array($suffix, $suffixs)) return false;
-        return true;
+
+        $normalizeDomain = static fn (string $domain) => User::normalizeEmailDomain($domain);
+
+        if (!is_array($suffixs)) {
+            $suffixs = preg_split('/,/', $suffixs) ?: [];
+        }
+
+        return in_array(
+            $normalizeDomain($suffix),
+            array_map($normalizeDomain, $suffixs),
+            true
+        );
     }
 
     public static function trafficConvert(float $byte)

@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class UpdateService
 {
@@ -167,6 +169,17 @@ class UpdateService
 
     public function executeUpdate(): array
     {
+        // Old Octane/WebSocket workers can still write the pre-upgrade email
+        // format. This data cutover must run after every old writer is stopped.
+        if (Schema::hasTable('v2_user') && DB::table('v2_user')->exists()
+            && (!Schema::hasTable('migrations') || !DB::table('migrations')
+                ->where('migration', '2026_11_02_000001_normalize_user_email_identity')->exists())) {
+            return [
+                'success' => false,
+                'message' => __('本次邮箱身份升级需要停机维护，请停止所有应用进程并通过命令行运行 xboard:update。'),
+            ];
+        }
+
         // Check for new version first
         $updateInfo = $this->checkForUpdates();
         if ($updateInfo['is_local_newer']) {
@@ -333,7 +346,7 @@ class UpdateService
     protected function runMigrations(): void
     {
         try {
-            Process::run('php artisan migrate --force');
+            Process::run('php artisan xboard:update --no-interaction')->throw();
         } catch (\Exception $e) {
             Log::error('Migration failed: ' . $e->getMessage());
             throw new \Exception(__('update.migration_failed', ['error' => $e->getMessage()]));

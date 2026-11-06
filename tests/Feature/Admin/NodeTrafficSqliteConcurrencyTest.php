@@ -144,4 +144,20 @@ class NodeTrafficSqliteConcurrencyTest extends TestCase
         $this->assertTrue($this->otherWriterBlocked);
         $this->assertSame('checked', $user->fresh()->remarks);
     }
+
+    public function test_bulk_ban_holds_the_writer_lock_during_node_reports(): void
+    {
+        $user = $this->user();
+        Sanctum::actingAs($this->user(['is_admin' => true]));
+        $path = admin_setting('secure_path', admin_setting('frontend_admin_path', hash('crc32b', config('app.key'))));
+        $this->competeWithNodeReports($user);
+
+        $this->postJson('/api/v2/' . $path . '/user/ban', [
+            'scope' => 'selected',
+            'user_ids' => [$user->id],
+        ])->assertOk();
+
+        $this->assertTrue($this->otherWriterBlocked);
+        $this->assertTrue($user->fresh()->banned);
+    }
 }

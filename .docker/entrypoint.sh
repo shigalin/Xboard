@@ -128,18 +128,18 @@ redis_reachable() {
     esac
 }
 
-if [ ! -s /www/.env ] || ! grep -qE '^INSTALLED=(1|true)$' /www/.env || echo " $* " | grep -q ' xboard:install '; then
+if [ "${ENABLE_AUTO_UPDATE:-true}" = "false" ]; then
+    echo "[entrypoint] Skipping automatic update (ENABLE_AUTO_UPDATE=false)."
+elif [ ! -s /www/.env ] || ! grep -qE '^INSTALLED=(1|true)$' /www/.env || echo " $* " | grep -q ' xboard:install '; then
     echo "[entrypoint] Skipping xboard:update (not yet installed or running xboard:install)."
 else
     if redis_reachable; then
         echo "[entrypoint] Running xboard:update (redis reachable, real drivers)..."
-        php /www/artisan xboard:update --no-interaction || \
-            echo "[entrypoint] WARNING: xboard:update failed; continuing so supervisor can boot anyway." >&2
+        php /www/artisan xboard:update --no-interaction
     else
         echo "[entrypoint] Running xboard:update (redis not yet up, using array/sync drivers)..."
         CACHE_DRIVER=array QUEUE_CONNECTION=sync SESSION_DRIVER=array \
-            php /www/artisan xboard:update --no-interaction || \
-            echo "[entrypoint] WARNING: xboard:update failed; continuing so supervisor can boot anyway." >&2
+            php /www/artisan xboard:update --no-interaction
     fi
 fi
 

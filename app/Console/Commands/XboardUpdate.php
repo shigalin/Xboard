@@ -42,8 +42,28 @@ class XboardUpdate extends Command
     public function handle()
     {
         $this->info('正在导入数据库请稍等...');
-        Artisan::call("migrate", ['--force' => true]);
-        $this->info(Artisan::output());
+        $wasDown = app()->isDownForMaintenance();
+        if (!$wasDown && Artisan::call('down', ['--retry' => 60]) !== 0) {
+            $this->error('无法进入维护模式，已停止更新。');
+            return self::FAILURE;
+        }
+        // Leave maintenance enabled on failure, including process interruption.
+        // A successful retry preserves it until the operator explicitly resumes.
+        try {
+            $status = Artisan::call('migrate', ['--force' => true]);
+            $this->info(Artisan::output());
+            if ($status !== 0) {
+                $this->error('数据库迁移失败，已保留维护模式。');
+                return self::FAILURE;
+            }
+        } catch (\Throwable $exception) {
+            $this->error('数据库迁移失败，已保留维护模式。');
+            throw $exception;
+        }
+        if (!$wasDown && Artisan::call('up') !== 0) {
+            $this->error('无法退出维护模式，请检查后执行 php artisan up。');
+            return self::FAILURE;
+        }
         $this->info('正在检查并安装默认插件...');
         PluginManager::installDefaultPlugins();
         $this->info('默认插件检查完成');
@@ -60,6 +80,10 @@ class XboardUpdate extends Command
                 $this->warn('horizon:terminate skipped: ' . $e->getMessage());
             }
         }
-        $this->info('更新完毕，队列服务已重启，你无需进行任何操作。');
+        if ($wasDown) {
+            $this->warn('更新已完成，但站点仍处于维护模式。确认无误后请执行 php artisan up。');
+        } else {
+            $this->info('更新完毕。');
+        }
     }
 }

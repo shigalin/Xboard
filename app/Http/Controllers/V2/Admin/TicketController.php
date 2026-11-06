@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Ticket;
+use App\Models\User;
 use App\Services\TicketService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
@@ -69,6 +70,8 @@ class TicketController extends Controller
      */
     private function fetchTickets(Request $request)
     {
+        $request->validate(['email' => 'nullable|string']);
+
         $ticketModel = Ticket::with('user')
             ->when($request->has('status'), function ($query) use ($request) {
                 $query->where('status', $request->input('status'));
@@ -76,9 +79,9 @@ class TicketController extends Controller
             ->when($request->has('reply_status'), function ($query) use ($request) {
                 $query->whereIn('reply_status', $request->input('reply_status'));
             })
-            ->when($request->has('email'), function ($query) use ($request) {
+            ->when($request->filled('email'), function ($query) use ($request) {
                 $query->whereHas('user', function ($q) use ($request) {
-                    $q->where('email', $request->input('email'));
+                    $q->where('email', User::normalizeEmail($request->input('email')));
                 });
             });
 

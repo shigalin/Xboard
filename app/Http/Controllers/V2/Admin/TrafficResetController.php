@@ -47,7 +47,7 @@ class TrafficResetController extends Controller
 
     if ($request->filled('user_email')) {
       $query->whereHas('user', function ($query) use ($request) {
-        $query->where('email', 'like', '%' . $request->user_email . '%');
+        User::applyEmailSearch($query, $request->user_email);
       });
     }
 
