@@ -86,6 +86,28 @@ try {
     $bundle = substr($bundle, 0, $trafficStart)
         . 'cell:({row:e})=>Q.jsx(XboardNodeTraffic,{user:e.original})' . substr($bundle, $trafficEnd);
 
+    $balanceStart = strpos($bundle, '{accessorKey:"balance",header:({column:e})=>Q.jsx(eQt,{column:e,title:r("columns.balance")})');
+    $registerStart = $balanceStart === false ? false : strpos($bundle,
+        '{accessorKey:"created_at",header:({column:e})=>Q.jsx(eQt,{column:e,title:r("columns.register_time")})', $balanceStart);
+    if ($balanceStart === false || $registerStart === false) {
+        throw new RuntimeException('User balance and commission columns not found.');
+    }
+    $bundle = substr($bundle, 0, $balanceStart)
+        . '{accessorKey:"last_online_at",header:({column:e})=>Q.jsx(eQt,{column:e,title:r("dialog.fields.lastOnlineAt")}),'
+        . 'cell:({row:e})=>Q.jsx("div",{className:"whitespace-nowrap",children:e.original.last_online_at?SS(e.original.last_online_at):"—"}),'
+        . 'enableSorting:!0,size:180},'
+        . '{accessorKey:"remarks",header:({column:e})=>Q.jsx(eQt,{column:e,title:r("edit.form.remarks")}),'
+        . 'cell:({row:e})=>Q.jsx("div",{className:"truncate",style:{maxWidth:"160px"},title:e.original.remarks||"",children:e.original.remarks||"—"}),'
+        . 'enableSorting:!1,enableHiding:!1,size:160},' . substr($bundle, $registerStart);
+
+    // Sort nodes by the same upload + download byte total shown in the cell.
+    $bundle = replaceAdminFragment($bundle,
+        '{id:"traffic",header:({column:e})=>Q.jsx(eQt,{column:e,title:t("columns.traffic.title"),tooltip:t("columns.traffic.tooltip")})',
+        '{id:"traffic",accessorFn:e=>(e.u||0)+(e.d||0),header:({column:e})=>Q.jsx(eQt,{column:e,title:t("columns.traffic.title"),tooltip:t("columns.traffic.tooltip")})');
+    $bundle = replaceAdminFragment($bundle,
+        '},size:120,enableSorting:!1,enableHiding:!0},{id:"actions"',
+        '},size:120,enableSorting:!0,enableHiding:!0},{id:"actions"');
+
     $translations = file_get_contents($root . '/resources/js/admin/usage-locales.json');
     json_decode($translations, true, 512, JSON_THROW_ON_ERROR);
     $localeSetup = "for (const [language, additions] of Object.entries({$translations})) {\n"
