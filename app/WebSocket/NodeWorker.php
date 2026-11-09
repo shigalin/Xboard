@@ -113,7 +113,7 @@ class NodeWorker
                 foreach ($pendingNodeIds as $nodeId) {
                     $nodeId = (int) $nodeId;
                     if (NodeRegistry::get($nodeId) !== null) {
-                        NodeEventHandlers::pushDeviceStateToNode($nodeId, $service);
+                        NodeEventHandlers::pushDeviceStateToNode($nodeId);
                     }
                 }
             }

@@ -64,6 +64,9 @@ local function decimalGreater(left, right)
 end
 
 local current = redis.call('GET', ARGV[1])
+if ARGV[3] == '0' then
+    return current and 0 or 1
+end
 if current and not decimalGreater(ARGV[3], current) then
     return 0
 end
@@ -114,43 +117,47 @@ local function decimalGreater(left, right)
 end
 
 local current = redis.call('GET', sequenceKey)
-if current ~= incoming and redis.call('GET', reportTypeKey) == '1' then
+local sequenced = incoming ~= '0'
+if (not sequenced and current) or
+   (sequenced and current ~= incoming and redis.call('GET', reportTypeKey) == '1') then
     return {0}
 end
 
 local notifyUsers = {}
+local cutoff = tonumber(timestamp) - ttl
 for userId, ips in pairs(devices) do
     local userSequenceKey = userSequencePrefix .. userId
-    local userSequence = redis.call('GET', userSequenceKey)
+    local userSequence = sequenced and redis.call('GET', userSequenceKey)
     if not userSequence or decimalGreater(incoming, userSequence) then
         local hashKey = hashPrefix .. userId
-        local oldIPs = {}
-        local oldCount = 0
-        for _, field in ipairs(redis.call('HKEYS', hashKey)) do
-            if string.sub(field, 1, string.len(nodePrefix)) == nodePrefix then
-                oldIPs[string.sub(field, string.len(nodePrefix) + 1)] = true
-                oldCount = oldCount + 1
-                redis.call('HDEL', hashKey, field)
-            end
+        local reported = {}
+        for _, ip in ipairs(ips) do
+            reported[nodePrefix .. ip] = true
         end
-
-        local changed = oldCount ~= #ips
-        if not changed then
-            for _, ip in ipairs(ips) do
-                if not oldIPs[ip] then
+        local retained = 0
+        local changed = false
+        local fields = redis.call('HGETALL', hashKey)
+        for i = 1, #fields, 2 do
+            local field = fields[i]
+            if string.sub(field, 1, string.len(nodePrefix)) == nodePrefix then
+                if not reported[field] then
+                    redis.call('HDEL', hashKey, field)
                     changed = true
-                    break
+                elseif (tonumber(fields[i + 1]) or 0) >= cutoff then
+                    retained = retained + 1
                 end
             end
         end
+        changed = changed or retained ~= #ips
 
-        redis.call('SREM', indexKey, userId)
         if #ips > 0 then
             for _, ip in ipairs(ips) do
                 redis.call('HSET', hashKey, nodePrefix .. ip, timestamp)
             end
             redis.call('EXPIRE', hashKey, ttl)
             redis.call('SADD', indexKey, userId)
+        else
+            redis.call('SREM', indexKey, userId)
         end
         local touchKey = touchPrefix .. userId
         if changed then
@@ -159,7 +166,9 @@ for userId, ips in pairs(devices) do
         elseif redis.call('SET', touchKey, '1', 'EX', touchTTL, 'NX') then
             table.insert(notifyUsers, userId)
         end
-        redis.call('SETEX', userSequenceKey, ttl * 2, incoming)
+        if sequenced then
+            redis.call('SETEX', userSequenceKey, ttl * 2, incoming)
+        end
     end
 end
 
@@ -467,14 +476,15 @@ LUA;
     }
 
     /**
-     * Apply a sequenced REST delta or WS full snapshot in bounded batches.
+     * Apply a REST delta or WS full snapshot in bounded batches. Legacy nodes
+     * use sequence 0 and cannot overwrite a sequenced node's state.
      * Per-user sequence fences keep overlapping batches correctly ordered.
      * Returns users needing an online_count refresh, or null when superseded.
      */
     public function syncNodeDevices(int $nodeId, array $devices, int $sequence, bool $fullSnapshot): ?array
     {
-        if ($sequence <= 0) {
-            throw new \InvalidArgumentException('device sequence must be positive');
+        if ($sequence < 0) {
+            throw new \InvalidArgumentException('device sequence must not be negative');
         }
 
         $this->ensureNodeIndex($nodeId);
@@ -824,9 +834,10 @@ LUA;
     }
 
     /**
-     * get devices of multiple users (for sync.devices, filter expired data)
+     * Get IPs for admission, ignoring observations from before a cooldown ended.
+     * Ban deadlines use milliseconds while device reports use whole seconds.
      */
-    public function getUsersDevices(array $userIds): array
+    public function getUsersDevices(array $userIds, array $banDeadlines = []): array
     {
         $result = [];
         $now = time();
@@ -839,9 +850,10 @@ LUA;
         foreach ($userIds as $index => $userId) {
             $data = $rows[$index] ?? [];
             if (!empty($data)) {
+                $banDeadline = (int) ($banDeadlines[$userId] ?? 0);
                 $ips = [];
                 foreach ($data as $field => $timestamp) {
-                    if ($now - $timestamp <= self::TTL) {
+                    if ($now - $timestamp <= self::TTL && $timestamp * 1000 >= $banDeadline) {
                         $ips[] = substr($field, strpos($field, ':') + 1);
                     }
                 }
@@ -972,6 +984,12 @@ LUA;
         if ($userIds !== []) {
             Redis::sadd(self::DB_SYNC_PENDING_KEY, ...$userIds);
         }
+    }
+
+    public function retryDeviceCheck(array $userIds): void
+    {
+        $keys = array_map(static fn ($userId) => self::USER_TOUCH_PREFIX . $userId, $userIds);
+        Redis::del(...$keys);
     }
 
     public function flushPendingUpdates(int $limit = 100): int

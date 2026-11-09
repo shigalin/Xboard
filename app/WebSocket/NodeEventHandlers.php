@@ -3,6 +3,7 @@
 namespace App\WebSocket;
 
 use App\Models\Server;
+use App\Services\DeviceBanService;
 use App\Services\DeviceStateService;
 use App\Services\NodeRegistry;
 use App\Services\ServerService;
@@ -45,64 +46,33 @@ class NodeEventHandlers
     {
         $service = app(DeviceStateService::class);
 
-        $sequence = (int) ($data['device_sequence'] ?? 0);
+        $sequence = max(0, (int) ($data['device_sequence'] ?? 0));
 
         if (isset($data['devices']) && is_array($data['devices'])) {
             $data = $data['devices'];
         }
 
-        if ($sequence > 0) {
-            $affectedUserIds = $service->syncNodeDevices($nodeId, $data, $sequence, true);
-            if ($affectedUserIds === null) {
-                Log::debug("[WS] Node#{$nodeId} ignored stale device sequence {$sequence}");
-                return;
-            }
+        $affectedUserIds = $service->syncNodeDevices($nodeId, $data, $sequence, true);
+        if ($affectedUserIds === null) {
+            Log::debug("[WS] Node#{$nodeId} ignored stale device report", ['sequence' => $sequence]);
+            return;
+        }
 
+        if ($sequence > 0) {
             $deviceSequences = $conn->deviceSequences ?? [];
             $deviceSequences[$nodeId] = $sequence;
             $conn->deviceSequences = $deviceSequences;
-
-            Redis::sadd('device:push_pending_nodes', $nodeId);
-            Log::debug("[WS] Node#{$nodeId} applied device sequence {$sequence}", [
-                'reported_users' => count($data),
-                'affected_users' => count($affectedUserIds),
-            ]);
-            return;
         }
 
-        if ($service->hasNodeSequence($nodeId)) {
-            Log::debug("[WS] Node#{$nodeId} ignored unsequenced device report");
-            return;
-        }
-
-        // Get old data
-        $oldDevices = $service->getNodeDevices($nodeId);
-
-        // Calculate diff
-        $removedUsers = array_diff_key($oldDevices, $data);
-        $newDevices = [];
-
-        foreach ($data as $userId => $ips) {
-            if (is_numeric($userId) && is_array($ips)) {
-                $newDevices[(int) $userId] = $ips;
-            }
-        }
-
-        // Handle removed users
-        foreach ($removedUsers as $userId => $ips) {
-            $service->removeNodeDevices($nodeId, $userId);
-            $service->notifyUpdate($userId);
-        }
-
-        // Handle new/updated users
-        foreach ($newDevices as $userId => $ips) {
-            $service->setDevices($userId, $nodeId, $ips);
-        }
-
-        // Mark for push
         Redis::sadd('device:push_pending_nodes', $nodeId);
-
-        Log::debug("[WS] Node#{$nodeId} synced " . count($newDevices) . " users, removed " . count($removedUsers));
+        if ($affectedUserIds !== []) {
+            app(DeviceBanService::class)->checkReportedDevices($nodeId, $data, $affectedUserIds);
+        }
+        Log::debug("[WS] Node#{$nodeId} applied device report", [
+            'sequence' => $sequence,
+            'reported_users' => count($data),
+            'affected_users' => count($affectedUserIds),
+        ]);
     }
 
     /**
@@ -116,33 +86,26 @@ class NodeEventHandlers
         $users = ServerService::getAvailableUsers($node);
         $userIds = $users->pluck('id')->toArray();
 
-        $service = app(DeviceStateService::class);
-        $devices = $service->getUsersDevices($userIds);
+        $snapshot = app(DeviceBanService::class)->getDeviceSnapshot($userIds);
+        NodeRegistry::send($nodeId, 'sync.devices', $snapshot);
 
-        NodeRegistry::send($nodeId, 'sync.devices', [
-            'users' => $devices,
-        ]);
-
-        Log::debug("[WS] Node#{$nodeId} requested devices, sent " . count($devices) . " users");
+        Log::debug("[WS] Node#{$nodeId} requested devices, sent " . count($snapshot['users']) . " users");
     }
 
     /**
      * Push device state to node
      */
-    public static function pushDeviceStateToNode(int $nodeId, DeviceStateService $service): void
+    public static function pushDeviceStateToNode(int $nodeId): void
     {
         $node = Server::find($nodeId);
         if (!$node) return;
 
         $users = ServerService::getAvailableUsers($node);
         $userIds = $users->pluck('id')->toArray();
-        $devices = $service->getUsersDevices($userIds);
+        $snapshot = app(DeviceBanService::class)->getDeviceSnapshot($userIds);
+        NodeRegistry::send($nodeId, 'sync.devices', $snapshot);
 
-        NodeRegistry::send($nodeId, 'sync.devices', [
-            'users' => $devices
-        ]);
-
-        Log::debug("[WS] Pushed device state to node#{$nodeId}: " . count($devices) . " users");
+        Log::debug("[WS] Pushed device state to node#{$nodeId}: " . count($snapshot['users']) . " users");
     }
 
     /**

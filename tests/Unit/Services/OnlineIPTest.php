@@ -90,6 +90,23 @@ class OnlineIPTest extends TestCase
         $this->assertEqualsCanonicalizing($keys, Redis::keys('*'));
     }
 
+    public function test_legacy_full_snapshots_and_deltas_share_change_detection_and_respect_sequence_fence(): void
+    {
+        $service = new DeviceStateService();
+        $initial = [1 => ['192.0.2.1'], 2 => ['198.51.100.2']];
+        $this->assertEqualsCanonicalizing([1, 2], $service->syncNodeDevices(1, $initial, 0, true));
+        $this->assertSame([], $service->syncNodeDevices(1, [1 => ['192.0.2.1']], 0, false));
+        $this->assertSame(1, $service->getDeviceCount(2));
+        $this->assertSame([2], $service->syncNodeDevices(1, [1 => ['192.0.2.1']], 0, true));
+        $this->assertSame(0, $service->getDeviceCount(2));
+
+        Redis::hset('user_devices:1', '1:192.0.2.1', time() - 301);
+        $this->assertSame([1], $service->syncNodeDevices(1, [1 => ['192.0.2.1']], 0, false));
+        $service->syncNodeDevices(1, [1 => ['203.0.113.1']], 10, true);
+        $this->assertNull($service->syncNodeDevices(1, $initial, 0, true));
+        $this->assertSame(['203.0.113.1'], array_column($service->getOnlineIPs(1), 'ip'));
+    }
+
     public function test_online_ips_are_not_limited_to_one_hundred_addresses(): void
     {
         $ips = array_map(fn ($i) => '2001:db8::' . dechex($i), range(1, 120));

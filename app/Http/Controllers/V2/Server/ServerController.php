@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\V2\Server;
 
 use App\Http\Controllers\Controller;
+use App\Models\Server;
+use App\Services\DeviceBanService;
 use App\Services\DeviceStateService;
 use App\Services\ServerService;
 use App\WebSocket\NodeWorker;
@@ -12,6 +14,23 @@ use Illuminate\Support\Facades\Cache;
 
 class ServerController extends Controller
 {
+    public function deviceBans(Request $request, DeviceBanService $bans): JsonResponse
+    {
+        $node = $request->attributes->get('node_info');
+        if (!$node instanceof Server) {
+            return response()->json(['message' => 'A valid node is required'], 422);
+        }
+        if ($request->isMethod('POST')) {
+            $data = $request->validate([
+                'device_bans' => 'required|array',
+                'device_bans.*' => 'required|integer|min:1',
+            ]);
+            $bans->reportBans($node, $data['device_bans']);
+        }
+
+        return response()->json(['device_bans' => (object) $bans->activeBans($node)]);
+    }
+
     /**
      * server handshake api
      */
@@ -64,7 +83,7 @@ class ServerController extends Controller
         $alive = $request->input('alive');
         if (is_array($alive)) {
             ServerService::processAlive(
-                $node->id,
+                $node,
                 $alive,
                 (int) $request->input('device_sequence', 0),
                 $request->boolean('device_full_snapshot')

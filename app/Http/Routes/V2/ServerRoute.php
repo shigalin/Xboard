@@ -24,6 +24,7 @@ class ServerRoute
             $route->post('alive', [UniProxyController::class, 'alive']);
             $route->get('alivelist', [UniProxyController::class, 'alivelist']);
             $route->get('devices', [UniProxyController::class, 'devices']);
+            $route->match(['GET', 'POST'], 'device-bans', [ServerController::class, 'deviceBans']);
             $route->post('status', [UniProxyController::class, 'status']);
         });
 

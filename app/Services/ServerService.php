@@ -92,17 +92,18 @@ class ServerService
 
     /**
      * 根据权限组获取可用的用户列表
-     * @param array $groupIds
+     * @param int[]|null $userIds
      * @return Collection
      */
-    public static function getAvailableUsers(Server $node)
+    public static function getAvailableUsers(Server $node, ?array $userIds = null)
     {
         $groupIds = $node->group_ids ?? [];
-        if (empty($groupIds)) {
+        if (empty($groupIds) || $userIds === []) {
             return collect();
         }
         $users = User::toBase()
             ->whereIn('group_id', $groupIds)
+            ->when($userIds !== null, fn ($query) => $query->whereIntegerInRaw('id', $userIds))
             ->whereRaw('u + d < transfer_enable')
             ->where(function ($query) {
                 $query->where('expired_at', '>=', time())
@@ -153,27 +154,22 @@ class ServerService
      * 处理节点在线设备汇报
      */
     public static function processAlive(
-        int $nodeId,
+        Server $node,
         array $alive,
         int $sequence = 0,
         bool $fullSnapshot = false
     ): void
     {
+        $nodeId = (int) $node->id;
         $service = app(DeviceStateService::class);
-        if ($sequence > 0) {
-            $affectedUserIds = $service->syncNodeDevices($nodeId, $alive, $sequence, $fullSnapshot);
-            if ($affectedUserIds === null) {
-                return;
-            }
-            return;
+        if ($sequence <= 0) {
+            $alive = array_map(static fn ($ips) => (array) $ips, $alive);
+            $fullSnapshot = false;
         }
 
-        if ($service->hasNodeSequence($nodeId)) {
-            return;
-        }
-
-        foreach ($alive as $uid => $ips) {
-            $service->setDevices((int) $uid, $nodeId, (array) $ips);
+        $affectedUserIds = $service->syncNodeDevices($nodeId, $alive, max(0, $sequence), $fullSnapshot);
+        if ($affectedUserIds) {
+            app(DeviceBanService::class)->checkReportedDevices($node, $alive, $affectedUserIds);
         }
     }
 

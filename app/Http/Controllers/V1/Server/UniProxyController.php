@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\V1\Server;
 
 use App\Http\Controllers\Controller;
+use App\Services\DeviceBanService;
 use App\Services\DeviceStateService;
 use App\Services\ServerService;
 use Illuminate\Http\Request;
@@ -89,7 +90,7 @@ class UniProxyController extends Controller
             ->all();
 
         return response()->json([
-            'users' => (object) $this->deviceStateService->getUsersDevices($userIds),
+            'users' => (object) app(DeviceBanService::class)->getDeviceSnapshot($userIds)['users'],
         ]);
     }
 
@@ -101,7 +102,7 @@ class UniProxyController extends Controller
             return response()->json(['error' => 'Invalid online data'], 400);
         }
 
-        ServerService::processAlive($node->id, $data);
+        ServerService::processAlive($node, $data);
 
         return response()->json(['data' => true]);
     }
