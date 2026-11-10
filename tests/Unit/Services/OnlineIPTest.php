@@ -107,6 +107,19 @@ class OnlineIPTest extends TestCase
         $this->assertSame(['203.0.113.1'], array_column($service->getOnlineIPs(1), 'ip'));
     }
 
+    public function test_delta_skips_index_migration_until_a_full_snapshot_needs_it(): void
+    {
+        $service = new DeviceStateService();
+        Redis::hset('user_devices:2', '1:198.51.100.2', time());
+
+        $service->syncNodeDevices(1, [1 => ['192.0.2.1']], 0, false);
+        $this->assertSame(['1'], Redis::smembers('device:node_index:1'));
+        $this->assertSame(['198.51.100.2'], array_column($service->getOnlineIPs(2), 'ip'));
+
+        $service->syncNodeDevices(1, [1 => ['192.0.2.1']], 0, true);
+        $this->assertSame([], $service->getOnlineIPs(2));
+    }
+
     public function test_online_ips_are_not_limited_to_one_hundred_addresses(): void
     {
         $ips = array_map(fn ($i) => '2001:db8::' . dechex($i), range(1, 120));

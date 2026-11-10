@@ -487,7 +487,9 @@ LUA;
             throw new \InvalidArgumentException('device sequence must not be negative');
         }
 
-        $this->ensureNodeIndex($nodeId);
+        if ($fullSnapshot) {
+            $this->ensureNodeIndex($nodeId);
+        }
 
         $normalized = [];
         foreach ($devices as $userId => $ips) {
