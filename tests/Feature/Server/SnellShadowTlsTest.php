@@ -5,6 +5,7 @@ namespace Tests\Feature\Server;
 use App\Http\Controllers\V1\Client\ClientController;
 use App\Http\Requests\Admin\ServerSave;
 use App\Models\Server;
+use App\Models\SubscribeTemplate;
 use App\Protocols\ClashMeta;
 use App\Protocols\SingBox;
 use App\Services\ServerService;
@@ -145,4 +146,42 @@ class SnellShadowTlsTest extends TestCase
             $this->assertSame($expected, array_column($proxies, 'name'), json_encode([$userAgent, $query]));
         }
     }
+    public function test_handshake_server_accepts_only_dns_hostnames(): void
+    {
+        foreach (['example.com', 'TLS.Example.COM', 'node-1.example.com', 'xn--bcher-kva.example', str_repeat('a', 63) . '.example'] as $host) {
+            $this->assertTrue($this->passes($this->snell(5, ['enabled' => true, 'server' => $host])), $host);
+        }
+        foreach (['https://example.com', 'example.com:443', 'example.com/path', 'user@example.com', ' example.com', 'example.com ', '*.example.com', 'foo_bar.example', '-bad.example', 'bad-.example', 'a..example', str_repeat('a', 64) . '.example', '127.0.0.1', '2001:db8::1', '[::1]', '例子.测试'] as $host) {
+            $this->assertFalse($this->passes($this->snell(5, ['enabled' => true, 'server' => $host])), $host);
+        }
+    }
+
+    public function test_sing_box_subscription_uses_core_ua_before_format_flag_version(): void
+    {
+        SubscribeTemplate::setContent('singbox', json_encode([
+            'outbounds' => [['type' => 'direct', 'tag' => 'direct'], ['type' => 'block', 'tag' => 'block']],
+            'route' => ['rules' => [['domain' => ['blocked.example'], 'outbound' => 'block']]],
+        ]));
+        $user = ['uuid' => self::UUID, 'u' => 0, 'd' => 0, 'transfer_enable' => 0, 'expired_at' => null];
+        try {
+            foreach ([
+                ['sing-box 1.14.0', 'sing-box/1.12.0', true],
+                ['sing-box 1.12.0', 'sing-box/1.14.0', false],
+                ['SFM/1.0 (sing-box v1.14.0)', 'sing-box/1.12.0', true],
+                // Without a core version in the UA, retain the existing flag fallback.
+                ['', 'sing-box/1.12.0', false],
+                ['', 'sing-box/1.14.0', true],
+            ] as [$ua, $flag, $modern]) {
+                $request = Request::create('/api/v1/client/subscribe', 'GET', ['flag' => $flag], [], [], ['HTTP_USER_AGENT' => $ua]);
+                $response = app(ClientController::class)->doSubscribe($request, $user, []);
+                $config = json_decode($response->getContent(), true, 512, JSON_THROW_ON_ERROR);
+                $rule = $config['route']['rules'][0];
+                $this->assertSame($modern, !in_array('block', array_column($config['outbounds'], 'type')), $ua . ' / ' . $flag);
+                $this->assertSame($modern ? 'reject' : 'block', $modern ? $rule['action'] : $rule['outbound']);
+            }
+        } finally {
+            SubscribeTemplate::flushCache('singbox');
+        }
+    }
+
 }

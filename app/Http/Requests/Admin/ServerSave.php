@@ -198,6 +198,18 @@ class ServerSave extends FormRequest
                 $this->buildTlsObjectRules(includeRoot: true),
             ),
             'snell' => array_merge($rules, [
+                // This value is both the handshake target and the client's SNI.
+                // Accept ASCII DNS hostnames (IDNs must use Punycode), not URLs or IP literals.
+                'shadow_tls.server' => [
+                    'required_if:protocol_settings.shadow_tls.enabled,true,1', 'nullable', 'string', 'max:253',
+                    function ($attribute, $value, $fail) {
+                        if (!is_string($value)
+                            || filter_var($value, FILTER_VALIDATE_IP) !== false
+                            || filter_var($value, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) === false) {
+                            $fail('The ShadowTLS handshake server must be a DNS hostname without a scheme, port, or path.');
+                        }
+                    },
+                ],
                 // Snell v6 rejects a PSK outside 12..255 bytes; min/max would count characters.
                 'psk' => ['required', 'string', function ($attribute, $value, $fail) {
                     $bytes = is_string($value) ? strlen($value) : 0;
