@@ -81,7 +81,8 @@ class ClientController extends Controller
             'servers' => $serversFiltered,
             'clientName' => $clientInfo['name'] ?? null,
             'clientVersion' => $clientInfo['version'] ?? null,
-            'userAgent' => $clientInfo['flag'] ?? null
+            // The format flag selects the serializer; capability checks need the real client UA.
+            'userAgent' => $request->header('User-Agent', '')
         ]);
 
         return $protocolInstance->handle();

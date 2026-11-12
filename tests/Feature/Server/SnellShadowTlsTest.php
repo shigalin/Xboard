@@ -2,12 +2,14 @@
 
 namespace Tests\Feature\Server;
 
+use App\Http\Controllers\V1\Client\ClientController;
 use App\Http\Requests\Admin\ServerSave;
 use App\Models\Server;
 use App\Protocols\ClashMeta;
 use App\Protocols\SingBox;
 use App\Services\ServerService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use ReflectionProperty;
 use Symfony\Component\Yaml\Yaml;
@@ -123,5 +125,24 @@ class SnellShadowTlsTest extends TestCase
         $protocol = new SingBox(['uuid' => self::UUID], $servers, 'sing-box', '1.14.0');
         $kept = (new ReflectionProperty(SingBox::class, 'servers'))->getValue($protocol);
         $this->assertSame(['userkey'], array_column($kept, 'name'));
+    }
+
+    public function test_subscription_format_flag_preserves_the_real_core_user_agent(): void
+    {
+        $user = ['uuid' => self::UUID, 'u' => 0, 'd' => 0, 'transfer_enable' => 0, 'expired_at' => null];
+        $servers = [$this->behindShadowTls(5, 'v5'), $this->behindShadowTls(6, 'v6')];
+        foreach ([
+            ['clash.meta/1.19.34', [], ['v5', 'v6']],
+            ['clash.meta/1.19.34', ['flag' => 'meta'], ['v5', 'v6']],
+            ['clash.meta/1.19.28', ['flag' => 'meta'], ['v5']],
+            // A format override cannot claim support absent from the actual core.
+            ['clash.meta/1.19.27', ['flag' => 'clash.meta/1.19.34'], []],
+            ['', ['flag' => 'clash.meta/1.19.34'], []],
+        ] as [$userAgent, $query, $expected]) {
+            $request = Request::create('/api/v1/client/subscribe', 'GET', $query, [], [], ['HTTP_USER_AGENT' => $userAgent]);
+            $response = app(ClientController::class)->doSubscribe($request, $user, $servers);
+            $proxies = Yaml::parse($response->getContent())['proxies'] ?? [];
+            $this->assertSame($expected, array_column($proxies, 'name'), json_encode([$userAgent, $query]));
+        }
     }
 }
