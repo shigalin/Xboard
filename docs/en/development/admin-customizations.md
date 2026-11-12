@@ -119,3 +119,23 @@ hides old cached totals during the fetch.
 Deploy the migration before restarting queue workers on the new code, then run
 the admin customization script (the existing update/build scripts do this).
 Old workers do not record node detail, so their traffic remains unattributed.
+
+## Snell nodes and Hysteria2 gecko obfs
+
+The same script adds the `snell` node type to the admin (type list, colour,
+type filter and settings form) and a `gecko` entry to the Hysteria2 obfs
+select. The form and its labels live in `resources/js/admin/` next to the
+other components.
+
+A Snell node stores `version` (5 or 6, the server version), a `psk` shared by
+all users (12-255 bytes), `obfs_mode` (`none`/`http`, version 5) and
+`mode` (`default`/`unshaped`/`unsafe-raw`, version 6). The node runs in
+multi-user mode: each user authenticates with the PSK plus their UUID as the
+user key. Only the sing-box subscription lists Snell nodes, and only for
+sing-box 1.14.0 or later, which sends that user key; a version 5 node is
+written as a version 4 outbound because sing-box has no version 5 client.
+
+Hysteria2 nodes with gecko obfs enabled are likewise sent only to sing-box
+1.14.0 or later and left out of every other subscription format. Gecko uses
+sing-box's default packet sizes on both sides. Both features need an
+xboard-node build whose sing-box includes them.

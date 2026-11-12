@@ -20,6 +20,7 @@ class SingBox extends AbstractProtocol
         Server::TYPE_ANYTLS,
         Server::TYPE_SOCKS,
         Server::TYPE_HTTP,
+        Server::TYPE_SNELL,
     ];
     private $config;
     const CUSTOM_TEMPLATE_FILE = 'resources/rules/custom.sing-box.json';
@@ -176,6 +177,10 @@ class SingBox extends AbstractProtocol
             if ($item['type'] === Server::TYPE_HTTP) {
                 $httpConfig = $this->buildHttp($this->user['uuid'], $item);
                 $proxies[] = $httpConfig;
+            }
+            // An older core rejects the whole profile on an unknown outbound type.
+            if ($item['type'] === Server::TYPE_SNELL && $this->supportsFeature('sing-box', '1.14.0')) {
+                $proxies[] = $this->buildSnell($this->user['uuid'], $item);
             }
         }
         foreach ($outbounds as &$outbound) {
@@ -729,6 +734,33 @@ class SingBox extends AbstractProtocol
             array_merge($baseConfig, $speedConfig, $versionConfig),
             fn($v) => !is_null($v)
         );
+    }
+
+    protected function supportsHysteriaGeckoObfs(): bool
+    {
+        return $this->supportsFeature('sing-box', '1.14.0');
+    }
+
+    protected function buildSnell($userKey, $server): array
+    {
+        $protocol_settings = $server['protocol_settings'];
+        $array = [
+            'type' => 'snell',
+            'tag' => $server['name'],
+            'server' => $server['host'],
+            'server_port' => $server['port'],
+            'psk' => data_get($protocol_settings, 'psk'),
+            'userkey' => $userKey,
+        ];
+        if ((int) data_get($protocol_settings, 'version') === 6) {
+            $array['version'] = 6;
+            $array['mode'] = data_get($protocol_settings, 'mode', 'default');
+        } else {
+            // sing-box has no v5 client: a v5 server speaks the v4 wire protocol.
+            $array['version'] = 4;
+            $array['obfs_mode'] = data_get($protocol_settings, 'obfs_mode', 'none');
+        }
+        return $array;
     }
 
     protected function buildTuic($password, $server): array

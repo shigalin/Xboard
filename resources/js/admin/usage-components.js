@@ -227,3 +227,56 @@ function XboardNodeTraffic({ user }) {
     )
   );
 }
+
+// Snell node settings. `version` is the server version (5 or 6); the node PSK
+// is shared by all users, who authenticate with their UUID as the user key.
+function XboardSnellSchema(routing) {
+  return py({
+    version: yy().default(5),
+    psk: cy().default(''),
+    obfs_mode: cy().default('none'),
+    mode: cy().default('default'),
+    routing: routing.optional().default({}),
+  });
+}
+
+function XboardSnellForm({ form, t }) {
+  const h = H.createElement;
+  const label = (key) => h(Zy, { className: 'text-[12px] font-mono text-foreground/80' }, t(key));
+  const select = (name, options, fallback, parse = (value) => value) => h($y, {
+    key: name,
+    control: form.control,
+    name,
+    render: ({ field }) => h(Gy, { className: 'flex-1' },
+      label('dynamic_form.snell.' + name + '.label'),
+      h(Yy, null,
+        h(yzt, { value: String(field.value || fallback), onValueChange: (value) => field.onChange(parse(value)) },
+          h(Czt, { className: 'font-mono text-xs' }, h(wzt, null)),
+          h(Nzt, null, h(xzt, null, options.map((option) =>
+            h(Lzt, { key: option, value: option, className: 'cursor-pointer' }, option))))))),
+  });
+  const generate = () => {
+    const bytes = crypto.getRandomValues(new Uint8Array(24));
+    form.setValue('psk', window.btoa(String.fromCharCode(...bytes)), { shouldDirty: true });
+  };
+
+  return h(H.Fragment, null,
+    h('div', { className: 'flex gap-2' },
+      select('version', ['5', '6'], 5, Number),
+      form.watch('version') == 6
+        ? select('mode', ['default', 'unshaped', 'unsafe-raw'], 'default')
+        : select('obfs_mode', ['none', 'http'], 'none')),
+    h($y, {
+      control: form.control,
+      name: 'psk',
+      render: ({ field }) => h(Gy, null,
+        label('dynamic_form.snell.psk.label'),
+        h(Yy, null, h('div', { className: 'flex gap-2' },
+          h(u8e, { className: 'font-mono text-xs', placeholder: t('dynamic_form.snell.psk.placeholder'), ...field }),
+          h(xtt, {
+            type: 'button', variant: 'outline', size: 'icon', className: 'h-9 w-9 shrink-0',
+            title: t('dynamic_form.snell.psk.generate'), 'aria-label': t('dynamic_form.snell.psk.generate'),
+            onClick: generate,
+          }, h(YXt, { icon: 'lucide:rotate-cw', className: 'h-4 w-4' }))))),
+    }));
+}

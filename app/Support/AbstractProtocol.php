@@ -91,6 +91,7 @@ abstract class AbstractProtocol
     protected function filterServersByVersion()
     {
         $this->filterByAllowedProtocols();
+        $this->filterUnsupportedHysteriaObfs();
         $hasGlobalConfig = isset($this->protocolRequirements['*']);
         $hasClientConfig = isset($this->protocolRequirements[$this->clientName]);
 
@@ -237,6 +238,29 @@ abstract class AbstractProtocol
                 ->values()
                 ->all();
         }
+    }
+
+    /**
+     * Gecko obfs exists only in sing-box 1.14+. A client without it cannot
+     * connect, so such nodes are left out rather than sent as salamander.
+     */
+    protected function supportsHysteriaGeckoObfs(): bool
+    {
+        return false;
+    }
+
+    protected function filterUnsupportedHysteriaObfs(): void
+    {
+        if ($this->supportsHysteriaGeckoObfs()) {
+            return;
+        }
+        $this->servers = collect($this->servers)
+            ->reject(fn($server) => ($server['type'] ?? null) === 'hysteria'
+                && (int) data_get($server, 'protocol_settings.version') === 2
+                && data_get($server, 'protocol_settings.obfs.open')
+                && data_get($server, 'protocol_settings.obfs.type') === 'gecko')
+            ->values()
+            ->all();
     }
 
     /**

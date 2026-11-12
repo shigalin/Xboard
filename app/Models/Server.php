@@ -70,6 +70,7 @@ class Server extends Model
     public const TYPE_NAIVE = 'naive';
     public const TYPE_HTTP = 'http';
     public const TYPE_MIERU = 'mieru';
+    public const TYPE_SNELL = 'snell';
     public const STATUS_OFFLINE = 0;
     public const STATUS_ONLINE_NO_PUSH = 1;
     public const STATUS_ONLINE = 2;
@@ -108,6 +109,7 @@ class Server extends Model
         self::TYPE_NAIVE,
         self::TYPE_HTTP,
         self::TYPE_MIERU,
+        self::TYPE_SNELL,
     ];
 
     protected $table = 'v2_server';
@@ -273,6 +275,7 @@ class Server extends Model
                 'type' => 'object',
                 'fields' => [
                     'open' => ['type' => 'boolean', 'default' => false],
+                    // Hysteria2 only: salamander or gecko (sing-box 1.14+).
                     'type' => ['type' => 'string', 'default' => 'salamander'],
                     'password' => ['type' => 'string', 'default' => null]
                 ]
@@ -320,6 +323,14 @@ class Server extends Model
             'transport' => ['type' => 'string', 'default' => 'TCP'],
             'traffic_pattern' => ['type' => 'string', 'default' => ''],
             ...self::MULTIPLEX_CONFIGURATION,
+        ],
+        // Server versions as sing-box names them: 5 (obfs_mode) or 6 (mode).
+        // Users authenticate with the shared psk plus their uuid as user key.
+        self::TYPE_SNELL => [
+            'version' => ['type' => 'integer', 'default' => 5],
+            'psk' => ['type' => 'string', 'default' => null],
+            'obfs_mode' => ['type' => 'string', 'default' => 'none'],
+            'mode' => ['type' => 'string', 'default' => 'default'],
         ]
     ];
 

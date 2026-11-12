@@ -67,7 +67,7 @@ class ServerSave extends FormRequest
             'version' => 'required|integer',
             'alpn' => 'nullable|string',
             'obfs.open' => 'nullable|boolean',
-            'obfs.type' => 'string|nullable',
+            'obfs.type' => 'nullable|string|in:salamander,gecko',
             'obfs.password' => 'string|nullable',
             'bandwidth.up' => 'nullable|integer',
             'bandwidth.down' => 'nullable|integer',
@@ -106,6 +106,12 @@ class ServerSave extends FormRequest
             'tls' => 'nullable|array',
             'alpn' => 'nullable|string',
             'padding_scheme' => 'nullable|array',
+        ],
+        'snell' => [
+            'version' => 'required|integer|in:5,6',
+            'psk' => 'required|string',
+            'obfs_mode' => 'nullable|string|in:none,http',
+            'mode' => 'nullable|string|in:default,unshaped,unsafe-raw',
         ],
     ];
 
@@ -187,6 +193,15 @@ class ServerSave extends FormRequest
                 $rules,
                 $this->buildTlsObjectRules(includeRoot: true),
             ),
+            'snell' => array_merge($rules, [
+                // Snell v6 rejects a PSK outside 12..255 bytes; min/max would count characters.
+                'psk' => ['required', 'string', function ($attribute, $value, $fail) {
+                    $bytes = is_string($value) ? strlen($value) : 0;
+                    if ($bytes < 12 || $bytes > 255) {
+                        $fail('The PSK must be 12 to 255 bytes long.');
+                    }
+                }],
+            ]),
             default => $rules,
         };
     }

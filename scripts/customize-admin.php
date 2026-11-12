@@ -108,6 +108,24 @@ try {
         '},size:120,enableSorting:!1,enableHiding:!0},{id:"actions"',
         '},size:120,enableSorting:!0,enableHiding:!0},{id:"actions"');
 
+    // Hysteria2 gecko obfs and the Snell node type; the form lives in
+    // usage-components.js. Function declarations there are hoisted, so the
+    // protocol registry can call them while the bundle is still evaluating.
+    foreach ([
+        ['Q.jsx(xzt,{children:Q.jsx(Lzt,{value:"salamander",children:t("dynamic_form.hysteria.obfs.type.salamander")})})',
+            'Q.jsxs(xzt,{children:[Q.jsx(Lzt,{value:"salamander",children:t("dynamic_form.hysteria.obfs.type.salamander")}),'
+            . 'Q.jsx(Lzt,{value:"gecko",children:t("dynamic_form.hysteria.obfs.type.gecko")})]})'],
+        ['e.AnyTLS="anytls",e))(iqt||{})', 'e.AnyTLS="anytls",e.Snell="snell",e))(iqt||{})'],
+        ['{type:"anytls",label:"AnyTLS"}],sqt=', '{type:"anytls",label:"AnyTLS"},{type:"snell",label:"Snell"}],sqt='],
+        ['anytls:"#7E57C2"}', 'anytls:"#7E57C2",snell:"#3F51B5"}'],
+        ['color:sqt[iqt.Mieru]}];function x5t(',
+            'color:sqt[iqt.Mieru]},{value:iqt.Snell,label:"Snell",color:sqt[iqt.Snell]}];function x5t('],
+        ['mieru:{schema:n5t(t),component:r5t}}))',
+            'mieru:{schema:n5t(t),component:r5t},snell:{schema:XboardSnellSchema(t),component:XboardSnellForm}}))'],
+    ] as [$before, $after]) {
+        $bundle = replaceAdminFragment($bundle, $before, $after);
+    }
+
     $translations = file_get_contents($root . '/resources/js/admin/usage-locales.json');
     json_decode($translations, true, 512, JSON_THROW_ON_ERROR);
     $localeSetup = "for (const [language, additions] of Object.entries({$translations})) {\n"
@@ -115,7 +133,9 @@ try {
         . "  if (!resources) continue;\n"
         . "  resources.dashboard.usage = additions.usage;\n"
         . "  resources.user.onlineIPs = additions.onlineIPs;\n"
-        . "  resources.user.nodeTraffic = additions.nodeTraffic;\n}\n";
+        . "  resources.user.nodeTraffic = additions.nodeTraffic;\n"
+        . "  resources.server.dynamic_form.hysteria.obfs.type.gecko = additions.nodeForm.gecko;\n"
+        . "  resources.server.dynamic_form.snell = additions.nodeForm.snell;\n}\n";
     $components = file_get_contents($root . '/resources/js/admin/usage-components.js');
     $output = $localeSetup . $bundle . "\n" . $components;
     $file = 'assets/index-usage-' . substr(hash('sha256', $output), 0, 12) . '.js';
