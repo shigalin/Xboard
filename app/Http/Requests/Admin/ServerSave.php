@@ -112,6 +112,10 @@ class ServerSave extends FormRequest
             'psk' => 'required|string',
             'obfs_mode' => 'nullable|string|in:none,http',
             'mode' => 'nullable|string|in:default,unshaped,unsafe-raw',
+            'shadow_tls' => 'nullable|array',
+            'shadow_tls.enabled' => 'nullable|boolean',
+            'shadow_tls.server' => 'required_if:protocol_settings.shadow_tls.enabled,true,1|nullable|string|max:253',
+            'shadow_tls.server_port' => 'nullable|integer|min:1|max:65535',
         ],
     ];
 

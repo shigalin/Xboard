@@ -325,12 +325,24 @@ class Server extends Model
             ...self::MULTIPLEX_CONFIGURATION,
         ],
         // Server versions as sing-box names them: 5 (obfs_mode) or 6 (mode).
-        // Users authenticate with the shared psk plus their uuid as user key.
+        // Users authenticate with the shared psk plus their uuid as user key,
+        // or, behind ShadowTLS v3, with their uuid as the ShadowTLS password.
         self::TYPE_SNELL => [
             'version' => ['type' => 'integer', 'default' => 5],
             'psk' => ['type' => 'string', 'default' => null],
             'obfs_mode' => ['type' => 'string', 'default' => 'none'],
             'mode' => ['type' => 'string', 'default' => 'default'],
+            'shadow_tls' => [
+                'type' => 'object',
+                // A node saved before the option reads as switched off.
+                'default' => ['enabled' => false, 'server' => '', 'server_port' => 443],
+                'fields' => [
+                    'enabled' => ['type' => 'boolean', 'default' => false],
+                    // The TLS 1.3 site whose handshake is relayed; also the client SNI.
+                    'server' => ['type' => 'string', 'default' => ''],
+                    'server_port' => ['type' => 'integer', 'default' => 443],
+                ]
+            ],
         ]
     ];
 

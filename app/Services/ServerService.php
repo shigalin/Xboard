@@ -396,6 +396,11 @@ class ServerService
                         6 => ['mode' => $protocolSettings['mode']],
                         default => ['obfs' => $protocolSettings['obfs_mode']],
                     },
+                // The node puts ShadowTLS v3 in front of Snell when it gets a handshake server.
+                ...(data_get($protocolSettings, 'shadow_tls.enabled') ? [
+                    'shadow_tls_server' => data_get($protocolSettings, 'shadow_tls.server'),
+                    'shadow_tls_port' => (int) data_get($protocolSettings, 'shadow_tls.server_port', 443),
+                ] : []),
             ],
             default => [],
         };

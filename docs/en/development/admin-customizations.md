@@ -135,6 +135,19 @@ user key. Only the sing-box subscription lists Snell nodes, and only for
 sing-box 1.14.0 or later, which sends that user key; a version 5 node is
 written as a version 4 outbound because sing-box has no version 5 client.
 
+A Snell node can instead sit behind ShadowTLS v3 (`shadow_tls.enabled`, with
+`shadow_tls.server` as the handshake site and `shadow_tls.server_port`, default
+443), for clients that cannot send a user key. The node then authenticates each
+user by their UUID as the ShadowTLS password, ignores `obfs_mode` and no longer
+accepts user-key clients, so the sing-box subscription leaves it out. Only the
+Clash Meta subscription lists it, as a `snell` proxy with `obfs-opts.mode:
+shadow-tls`, and only when the request's User-Agent carries the mihomo core
+version (`clash.meta/x.y.z`): 1.19.28 or later for a version 5 node, 1.19.34
+or later for version 6. An older core rejects the whole profile, and GUI
+clients report their own version rather than the core's, so they do not
+receive these nodes. The handshake site must support TLS 1.3 and be reachable
+from the node.
+
 Hysteria2 nodes with gecko obfs enabled are likewise sent only to sing-box
 1.14.0 or later and left out of every other subscription format. Gecko uses
 sing-box's default packet sizes on both sides. Both features need an

@@ -230,12 +230,21 @@ function XboardNodeTraffic({ user }) {
 
 // Snell node settings. `version` is the server version (5 or 6); the node PSK
 // is shared by all users, who authenticate with their UUID as the user key.
+// With `shadow_tls` on, ShadowTLS v3 fronts the node and the UUID is the
+// ShadowTLS password instead. Its fields need defaults: a field the form
+// registers without one changes the form values on mount, and that change is
+// written back over the settings of the node being edited.
 function XboardSnellSchema(routing) {
   return py({
     version: yy().default(5),
     psk: cy().default(''),
     obfs_mode: cy().default('none'),
     mode: cy().default('default'),
+    shadow_tls: py({
+      enabled: uy().default(!1),
+      server: cy().nullable().default(''),
+      server_port: yy().default(443),
+    }).nullable().default({}),
     routing: routing.optional().default({}),
   });
 }
@@ -243,14 +252,14 @@ function XboardSnellSchema(routing) {
 function XboardSnellForm({ form, t }) {
   const h = H.createElement;
   const label = (key) => h(Zy, { className: 'text-[12px] font-mono text-foreground/80' }, t(key));
-  const select = (name, options, fallback, parse = (value) => value) => h($y, {
+  const select = (name, options, fallback, parse = (value) => value, format = (value) => String(value || fallback)) => h($y, {
     key: name,
     control: form.control,
     name,
     render: ({ field }) => h(Gy, { className: 'flex-1' },
       label('dynamic_form.snell.' + name + '.label'),
       h(Yy, null,
-        h(yzt, { value: String(field.value || fallback), onValueChange: (value) => field.onChange(parse(value)) },
+        h(yzt, { value: format(field.value), onValueChange: (value) => field.onChange(parse(value)) },
           h(Czt, { className: 'font-mono text-xs' }, h(wzt, null)),
           h(Nzt, null, h(xzt, null, options.map((option) =>
             h(Lzt, { key: option, value: option, className: 'cursor-pointer' }, option))))))),
@@ -260,12 +269,34 @@ function XboardSnellForm({ form, t }) {
     form.setValue('psk', window.btoa(String.fromCharCode(...bytes)), { shouldDirty: true });
   };
 
+  const input = (name, props) => h($y, {
+    key: name,
+    control: form.control,
+    name,
+    render: ({ field }) => h(Gy, { className: 'flex-1' },
+      label('dynamic_form.snell.' + name + '.label'),
+      h(Yy, null, h(u8e, { className: 'font-mono text-xs', ...field, ...props(field) }))),
+  });
+  const shadowTLS = Boolean(form.watch('shadow_tls.enabled'));
+
   return h(H.Fragment, null,
     h('div', { className: 'flex gap-2' },
       select('version', ['5', '6'], 5, Number),
       form.watch('version') == 6
         ? select('mode', ['default', 'unshaped', 'unsafe-raw'], 'default')
-        : select('obfs_mode', ['none', 'http'], 'none')),
+        // ShadowTLS replaces the v5 obfs layer.
+        : shadowTLS ? null : select('obfs_mode', ['none', 'http'], 'none')),
+    h('div', { className: 'flex gap-2' },
+      select('shadow_tls.enabled', ['off', 'on'], 'off', (value) => value === 'on', (value) => value ? 'on' : 'off'),
+      shadowTLS ? input('shadow_tls.server', (field) => ({
+        value: field.value || '',
+        placeholder: t('dynamic_form.snell.shadow_tls.server.placeholder'),
+      })) : null,
+      shadowTLS ? input('shadow_tls.server_port', (field) => ({
+        type: 'number',
+        value: field.value || 443,
+        onChange: (event) => field.onChange(Number(event.target.value) || 443),
+      })) : null),
     h($y, {
       control: form.control,
       name: 'psk',

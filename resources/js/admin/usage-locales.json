@@ -63,6 +63,18 @@
         },
         "mode": {
           "label": "流量整形模式"
+        },
+        "shadow_tls": {
+          "enabled": {
+            "label": "ShadowTLS v3"
+          },
+          "server": {
+            "label": "握手域名",
+            "placeholder": "支持 TLS 1.3 的站点，如 www.example.com"
+          },
+          "server_port": {
+            "label": "握手端口"
+          }
         }
       }
     }
@@ -131,6 +143,18 @@
         },
         "mode": {
           "label": "Traffic shaping mode"
+        },
+        "shadow_tls": {
+          "enabled": {
+            "label": "ShadowTLS v3"
+          },
+          "server": {
+            "label": "Handshake server",
+            "placeholder": "A TLS 1.3 site, e.g. www.example.com"
+          },
+          "server_port": {
+            "label": "Handshake port"
+          }
         }
       }
     }
@@ -199,6 +223,18 @@
         },
         "mode": {
           "label": "Режим шейпинга трафика"
+        },
+        "shadow_tls": {
+          "enabled": {
+            "label": "ShadowTLS v3"
+          },
+          "server": {
+            "label": "Сервер рукопожатия",
+            "placeholder": "Сайт с TLS 1.3, например www.example.com"
+          },
+          "server_port": {
+            "label": "Порт рукопожатия"
+          }
         }
       }
     }

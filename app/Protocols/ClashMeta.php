@@ -25,6 +25,7 @@ class ClashMeta extends AbstractProtocol
         Server::TYPE_SOCKS,
         Server::TYPE_HTTP,
         Server::TYPE_MIERU,
+        Server::TYPE_SNELL,
     ];
 
     protected $protocolRequirements = [
@@ -192,6 +193,11 @@ class ClashMeta extends AbstractProtocol
             }
             if ($item['type'] === Server::TYPE_MIERU) {
                 array_push($proxy, self::buildMieru($item['password'], $item));
+                array_push($proxies, $item['name']);
+            }
+            // mihomo cannot send a Snell user key, so it only reaches Snell behind ShadowTLS.
+            if ($item['type'] === Server::TYPE_SNELL && data_get($item, 'protocol_settings.shadow_tls.enabled')) {
+                array_push($proxy, self::buildSnell($user['uuid'], $item));
                 array_push($proxies, $item['name']);
             }
         }
@@ -703,6 +709,50 @@ class ClashMeta extends AbstractProtocol
             $array['port-range'] = $server['ports'];
         }
 
+        return $array;
+    }
+
+    /**
+     * mihomo reads Snell over ShadowTLS since 1.19.28 and Snell v6 since
+     * 1.19.34; an older core rejects the whole profile. Only the core reports
+     * its own version (clash.meta/x.y.z), GUI clients report theirs, so they
+     * do not get the node.
+     */
+    protected function supportsSnellShadowTls(array $server): bool
+    {
+        if (!preg_match('#(?:clash\.meta|mihomo)/v?(\d+\.\d+\.\d+)#i', (string) $this->userAgent, $matches)) {
+            return false;
+        }
+        $required = (int) data_get($server, 'protocol_settings.version') === 6 ? '1.19.34' : '1.19.28';
+        return version_compare($matches[1], $required, '>=');
+    }
+
+    public static function buildSnell($password, $server)
+    {
+        $protocol_settings = data_get($server, 'protocol_settings', []);
+        $array = [
+            'name' => $server['name'],
+            'type' => 'snell',
+            'server' => $server['host'],
+            'port' => $server['port'],
+            'psk' => data_get($protocol_settings, 'psk'),
+            'udp' => true,
+            // One ShadowTLS handshake then carries many requests.
+            'reuse' => true,
+            'obfs-opts' => [
+                'mode' => 'shadow-tls',
+                'version' => 3,
+                'host' => data_get($protocol_settings, 'shadow_tls.server'),
+                'password' => $password,
+            ],
+        ];
+        if ((int) data_get($protocol_settings, 'version') === 6) {
+            $array['version'] = 6;
+            $array['mode'] = data_get($protocol_settings, 'mode', 'default');
+        } else {
+            // A v5 server speaks the v4 wire protocol.
+            $array['version'] = 4;
+        }
         return $array;
     }
 

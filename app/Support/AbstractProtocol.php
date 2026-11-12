@@ -92,6 +92,7 @@ abstract class AbstractProtocol
     {
         $this->filterByAllowedProtocols();
         $this->filterUnsupportedHysteriaObfs();
+        $this->filterUnsupportedSnellShadowTls();
         $hasGlobalConfig = isset($this->protocolRequirements['*']);
         $hasClientConfig = isset($this->protocolRequirements[$this->clientName]);
 
@@ -247,6 +248,26 @@ abstract class AbstractProtocol
     protected function supportsHysteriaGeckoObfs(): bool
     {
         return false;
+    }
+
+    /**
+     * A Snell node behind ShadowTLS authenticates users by their ShadowTLS
+     * password and no longer accepts a Snell user key. Only a format that
+     * wraps Snell in ShadowTLS v3 for this client can list it.
+     */
+    protected function supportsSnellShadowTls(array $server): bool
+    {
+        return false;
+    }
+
+    protected function filterUnsupportedSnellShadowTls(): void
+    {
+        $this->servers = collect($this->servers)
+            ->reject(fn($server) => ($server['type'] ?? null) === 'snell'
+                && data_get($server, 'protocol_settings.shadow_tls.enabled')
+                && !$this->supportsSnellShadowTls($server))
+            ->values()
+            ->all();
     }
 
     protected function filterUnsupportedHysteriaObfs(): void
