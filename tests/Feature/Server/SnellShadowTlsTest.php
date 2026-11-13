@@ -228,6 +228,9 @@ class SnellShadowTlsTest extends TestCase
         $user = ['uuid' => self::UUID, 'u' => 0, 'd' => 0, 'transfer_enable' => 0, 'expired_at' => null];
         $node = $this->snell(6, null);
         $node['protocol_settings']['psk_mode'] = 'user';
+        // Gecko obfs is gated by the same core version as Snell.
+        $gecko = ['type' => 'hysteria', 'name' => 'gecko', 'host' => 'node.example.com', 'port' => 443, 'server_port' => 443, 'rate' => 1,
+            'protocol_settings' => ['version' => 2, 'obfs' => ['open' => true, 'type' => 'gecko', 'password' => 'obfs-secret'], 'tls' => ['server_name' => 'node.example.com']]];
         foreach ([
             ['sing-box 1.12.0', 'sing-box/1.14.0', false],
             ['sing-box 1.14.0', 'sing-box/1.12.0', true],
@@ -238,12 +241,37 @@ class SnellShadowTlsTest extends TestCase
             ['', 'sing-box/1.14.0', true],
         ] as [$ua, $flag, $expected]) {
             $request = Request::create('/api/v1/client/subscribe', 'GET', ['flag' => $flag], [], [], ['HTTP_USER_AGENT' => $ua]);
-            $response = app(ClientController::class)->doSubscribe($request, $user, [$node]);
+            $response = app(ClientController::class)->doSubscribe($request, $user, [$node, $gecko]);
             $config = json_decode($response->getContent(), true, 512, JSON_THROW_ON_ERROR);
             $snell = array_values(array_filter($config['outbounds'], fn($out) => $out['type'] === 'snell'));
             $this->assertCount($expected ? 1 : 0, $snell, $ua . ' / ' . $flag);
             if ($expected) { $this->assertSame(self::UUID, $snell[0]['psk']); }
+            $hysteria = array_values(array_filter($config['outbounds'], fn($out) => $out['type'] === 'hysteria2'));
+            $this->assertCount($expected ? 1 : 0, $hysteria, 'gecko: ' . $ua . ' / ' . $flag);
+            if ($expected) { $this->assertSame('gecko', $hysteria[0]['obfs']['type']); }
         }
+    }
+
+    public function test_credentials_the_form_hides_are_not_length_checked(): void
+    {
+        // Independent PSKs hide the shared PSK, and the ShadowTLS password while ShadowTLS is off.
+        $user = $this->snell(5, ['enabled' => false, 'password' => 'short']);
+        $user['protocol_settings']['psk_mode'] = 'user';
+        $user['protocol_settings']['psk'] = 'short';
+        $this->assertTrue($this->passes($user));
+
+        // A shared PSK hides the ShadowTLS password.
+        $shared = $this->behindShadowTls(5);
+        $shared['protocol_settings']['shadow_tls']['password'] = 'short';
+        $this->assertTrue($this->passes($shared));
+
+        // The credentials in use are still checked.
+        $shared['protocol_settings']['psk'] = 'short';
+        $this->assertFalse($this->passes($shared));
+        unset($shared['protocol_settings']['psk']);
+        $this->assertFalse($this->passes($shared));
+        $user['protocol_settings']['shadow_tls'] = ['enabled' => true, 'server' => 'www.example.com', 'password' => 'short'];
+        $this->assertFalse($this->passes($user));
     }
 
 }

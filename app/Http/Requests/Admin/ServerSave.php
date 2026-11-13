@@ -156,6 +156,7 @@ class ServerSave extends FormRequest
     private function getProtocolRules(string $type): array
     {
         $rules = self::PROTOCOL_RULES[$type] ?? [];
+        $snellUserPsk = $this->input('protocol_settings.psk_mode') === 'user';
 
         return match ($type) {
             'vmess' => array_merge(
@@ -199,10 +200,11 @@ class ServerSave extends FormRequest
                 $this->buildTlsObjectRules(includeRoot: true),
             ),
             'snell' => array_merge($rules, [
-                'shadow_tls.password' => [
-                    $this->input('protocol_settings.psk_mode') === 'user' && $this->boolean('protocol_settings.shadow_tls.enabled') ? 'required' : 'nullable',
-                    'string', 'min:12', 'max:255',
-                ],
+                // Only independent PSKs behind ShadowTLS use this password. The form hides the
+                // field otherwise, so a value left in it is not checked against its length.
+                'shadow_tls.password' => $snellUserPsk && $this->boolean('protocol_settings.shadow_tls.enabled')
+                    ? ['required', 'string', 'min:12', 'max:255']
+                    : ['nullable', 'string'],
                 // This value is both the handshake target and the client's SNI.
                 // Accept ASCII DNS hostnames (IDNs must use Punycode), not URLs or IP literals.
                 'shadow_tls.server' => [
@@ -216,7 +218,8 @@ class ServerSave extends FormRequest
                     },
                 ],
                 // Snell v6 rejects a PSK outside 12..255 bytes; min/max would count characters.
-                'psk' => ['required_unless:protocol_settings.psk_mode,user', 'nullable', 'string', function ($attribute, $value, $fail) {
+                // Independent PSKs ignore the shared PSK and the form hides it, so it is not checked.
+                'psk' => $snellUserPsk ? ['nullable', 'string'] : ['required', 'string', function ($attribute, $value, $fail) {
                     $bytes = is_string($value) ? strlen($value) : 0;
                     if ($bytes < 12 || $bytes > 255) {
                         $fail('The PSK must be 12 to 255 bytes long.');

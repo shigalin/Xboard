@@ -228,12 +228,13 @@ function XboardNodeTraffic({ user }) {
   );
 }
 
-// Snell node settings. `version` is the server version (5 or 6); the node PSK
-// is shared by all users, who authenticate with their UUID as the user key.
-// In user PSK mode the UUID is the Snell PSK; optional ShadowTLS uses a
-// node-wide password. Legacy mode keeps its original authentication. Its fields need defaults: a field the form
-// registers without one changes the form values on mount, and that change is
-// written back over the settings of the node being edited.
+// Snell node settings. `version` is the server version (5 or 6). In user PSK
+// mode each UUID is that user's Snell PSK and optional ShadowTLS uses a
+// node-wide password. In shared (legacy) mode all users share the node PSK and
+// authenticate with their UUID as the user key, or as the ShadowTLS password.
+// The fields need defaults: a field the form registers without one changes the
+// form values on mount, and that change is written back over the settings of
+// the node being edited.
 function XboardSnellSchema(routing) {
   return py({
     version: yy().default(5),

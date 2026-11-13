@@ -196,6 +196,7 @@ class ClashMeta extends AbstractProtocol
                 array_push($proxies, $item['name']);
             }
             // Independent PSKs work directly; legacy userkey nodes require ShadowTLS.
+            // Both need the core versions supportsSnellShadowTls() checks.
             if ($item['type'] === Server::TYPE_SNELL
                 && (data_get($item, 'protocol_settings.shadow_tls.enabled') || data_get($item, 'protocol_settings.psk_mode') === 'user')
                 && $this->supportsSnellShadowTls($item)) {

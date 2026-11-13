@@ -251,9 +251,10 @@ abstract class AbstractProtocol
     }
 
     /**
-     * A Snell node behind ShadowTLS authenticates users by their ShadowTLS
-     * password and no longer accepts a Snell user key. Only a format that
-     * wraps Snell in ShadowTLS v3 for this client can list it.
+     * A Snell node behind ShadowTLS no longer accepts a Snell user key: it
+     * takes the UUID as ShadowTLS password, or with independent PSKs the
+     * node-wide ShadowTLS password. Only a format that wraps Snell in
+     * ShadowTLS v3 for this client can list it.
      */
     protected function supportsSnellShadowTls(array $server): bool
     {

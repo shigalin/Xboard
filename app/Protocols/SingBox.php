@@ -137,8 +137,7 @@ class SingBox extends AbstractProtocol
     {
         $outbounds = $this->config['outbounds'];
         $proxies = [];
-        $coreVersion = $this->getSingBoxCoreVersion();
-        $supportsSnell = $coreVersion !== null && version_compare($coreVersion, '1.14.0', '>=');
+        $supportsSnell = $this->supportsCore('1.14.0');
         foreach ($this->servers as $item) {
             $protocol_settings = $item['protocol_settings'];
             if ($item['type'] === Server::TYPE_SHADOWSOCKS) {
@@ -740,7 +739,18 @@ class SingBox extends AbstractProtocol
 
     protected function supportsHysteriaGeckoObfs(): bool
     {
-        return $this->supportsFeature('sing-box', '1.14.0');
+        return $this->supportsCore('1.14.0');
+    }
+
+    /**
+     * An unknown outbound or obfs type makes an older core reject the whole
+     * profile, so these checks use the core version the client reports in its
+     * UA before the version of the format flag.
+     */
+    private function supportsCore(string $minVersion): bool
+    {
+        $coreVersion = $this->getSingBoxCoreVersion();
+        return $coreVersion !== null && version_compare($coreVersion, $minVersion, '>=');
     }
 
     protected function buildSnell($userKey, $server): array
