@@ -76,7 +76,8 @@
             "label": "握手端口"
           },
           "password": {
-            "label": "ShadowTLS 共享密码（12-255 字符）"
+            "label": "ShadowTLS 共享密码（12-255 字符）",
+            "generate": "生成随机密码"
           }
         },
         "psk_mode": {
@@ -164,7 +165,8 @@
             "label": "Handshake port"
           },
           "password": {
-            "label": "Shared ShadowTLS password (12-255 characters)"
+            "label": "Shared ShadowTLS password (12-255 characters)",
+            "generate": "Generate a random password"
           }
         },
         "psk_mode": {
@@ -252,7 +254,8 @@
             "label": "Порт рукопожатия"
           },
           "password": {
-            "label": "Общий пароль ShadowTLS (12–255 символов)"
+            "label": "Общий пароль ShadowTLS (12–255 символов)",
+            "generate": "Сгенерировать случайный пароль"
           }
         },
         "psk_mode": {

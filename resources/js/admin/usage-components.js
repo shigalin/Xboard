@@ -265,11 +265,11 @@ function XboardSnellForm({ form, t }) {
         h(yzt, { value: format(field.value), onValueChange: (value) => field.onChange(parse(value)) },
           h(Czt, { className: 'font-mono text-xs' }, h(wzt, null)),
           h(Nzt, null, h(xzt, null, options.map((option) =>
-            h(Lzt, { key: option, value: option, className: 'cursor-pointer' }, name === 'psk_mode' ? t('dynamic_form.snell.psk_mode.' + option) : option))))))),
+            h(Lzt, { key: option, value: option, className: 'cursor-pointer' }, option))))))),
   });
-  const generate = () => {
+  const generate = (name) => {
     const bytes = crypto.getRandomValues(new Uint8Array(24));
-    form.setValue('psk', window.btoa(String.fromCharCode(...bytes)), { shouldDirty: true });
+    form.setValue(name, window.btoa(String.fromCharCode(...bytes)), { shouldDirty: true });
   };
 
   const input = (name, props) => h($y, {
@@ -285,7 +285,6 @@ function XboardSnellForm({ form, t }) {
   return h(H.Fragment, null,
     h('div', { className: 'flex gap-2' },
       select('version', ['5', '6'], 5, Number),
-      select('psk_mode', ['shared', 'user'], 'user'),
       form.watch('version') == 6
         ? select('mode', ['default', 'unshaped'], 'default')
         // ShadowTLS replaces the v5 obfs layer.
@@ -301,9 +300,19 @@ function XboardSnellForm({ form, t }) {
         value: field.value || 443,
         onChange: (event) => field.onChange(Number(event.target.value) || 443),
       })) : null),
-    shadowTLS && form.watch('psk_mode') === 'user' ? input('shadow_tls.password', (field) => ({
-      type: 'password', autoComplete: 'new-password', value: field.value || '',
-    })) : null,
+    shadowTLS && form.watch('psk_mode') === 'user' ? h($y, {
+      control: form.control,
+      name: 'shadow_tls.password',
+      render: ({ field }) => h(Gy, null,
+        label('dynamic_form.snell.shadow_tls.password.label'),
+        h(Yy, null, h('div', { className: 'flex gap-2' },
+          h(u8e, { className: 'font-mono text-xs', ...field, type: 'text', autoComplete: 'new-password', value: field.value || '' }),
+          h(xtt, {
+            type: 'button', variant: 'outline', size: 'icon', className: 'h-9 w-9 shrink-0',
+            title: t('dynamic_form.snell.shadow_tls.password.generate'), 'aria-label': t('dynamic_form.snell.shadow_tls.password.generate'),
+            onClick: () => generate('shadow_tls.password'),
+          }, h(YXt, { icon: 'lucide:rotate-cw', className: 'h-4 w-4' }))))),
+    }) : null,
     form.watch('psk_mode') === 'user' ? null : h($y, {
       control: form.control,
       name: 'psk',
@@ -314,7 +323,7 @@ function XboardSnellForm({ form, t }) {
           h(xtt, {
             type: 'button', variant: 'outline', size: 'icon', className: 'h-9 w-9 shrink-0',
             title: t('dynamic_form.snell.psk.generate'), 'aria-label': t('dynamic_form.snell.psk.generate'),
-            onClick: generate,
+            onClick: () => generate('psk'),
           }, h(YXt, { icon: 'lucide:rotate-cw', className: 'h-4 w-4' }))))),
     }));
 }
