@@ -230,13 +230,14 @@ function XboardNodeTraffic({ user }) {
 
 // Snell node settings. `version` is the server version (5 or 6); the node PSK
 // is shared by all users, who authenticate with their UUID as the user key.
-// With `shadow_tls` on, ShadowTLS v3 fronts the node and the UUID is the
-// ShadowTLS password instead. Its fields need defaults: a field the form
+// In user PSK mode the UUID is the Snell PSK; optional ShadowTLS uses a
+// node-wide password. Legacy mode keeps its original authentication. Its fields need defaults: a field the form
 // registers without one changes the form values on mount, and that change is
 // written back over the settings of the node being edited.
 function XboardSnellSchema(routing) {
   return py({
     version: yy().default(5),
+    psk_mode: cy().default('user'),
     psk: cy().default(''),
     obfs_mode: cy().default('none'),
     mode: cy().default('default'),
@@ -244,6 +245,7 @@ function XboardSnellSchema(routing) {
       enabled: uy().default(!1),
       server: cy().nullable().default(''),
       server_port: yy().default(443),
+      password: cy().nullable().default(''),
     }).nullable().default({}),
     routing: routing.optional().default({}),
   });
@@ -262,7 +264,7 @@ function XboardSnellForm({ form, t }) {
         h(yzt, { value: format(field.value), onValueChange: (value) => field.onChange(parse(value)) },
           h(Czt, { className: 'font-mono text-xs' }, h(wzt, null)),
           h(Nzt, null, h(xzt, null, options.map((option) =>
-            h(Lzt, { key: option, value: option, className: 'cursor-pointer' }, option))))))),
+            h(Lzt, { key: option, value: option, className: 'cursor-pointer' }, name === 'psk_mode' ? t('dynamic_form.snell.psk_mode.' + option) : option))))))),
   });
   const generate = () => {
     const bytes = crypto.getRandomValues(new Uint8Array(24));
@@ -282,8 +284,9 @@ function XboardSnellForm({ form, t }) {
   return h(H.Fragment, null,
     h('div', { className: 'flex gap-2' },
       select('version', ['5', '6'], 5, Number),
+      select('psk_mode', ['shared', 'user'], 'user'),
       form.watch('version') == 6
-        ? select('mode', ['default', 'unshaped', 'unsafe-raw'], 'default')
+        ? select('mode', ['default', 'unshaped'], 'default')
         // ShadowTLS replaces the v5 obfs layer.
         : shadowTLS ? null : select('obfs_mode', ['none', 'http'], 'none')),
     h('div', { className: 'flex gap-2' },
@@ -297,7 +300,10 @@ function XboardSnellForm({ form, t }) {
         value: field.value || 443,
         onChange: (event) => field.onChange(Number(event.target.value) || 443),
       })) : null),
-    h($y, {
+    shadowTLS && form.watch('psk_mode') === 'user' ? input('shadow_tls.password', (field) => ({
+      type: 'password', autoComplete: 'new-password', value: field.value || '',
+    })) : null,
+    form.watch('psk_mode') === 'user' ? null : h($y, {
       control: form.control,
       name: 'psk',
       render: ({ field }) => h(Gy, null,

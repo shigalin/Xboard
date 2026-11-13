@@ -127,26 +127,39 @@ type filter and settings form) and a `gecko` entry to the Hysteria2 obfs
 select. The form and its labels live in `resources/js/admin/` next to the
 other components.
 
-A Snell node stores `version` (5 or 6, the server version), a `psk` shared by
-all users (12-255 bytes), `obfs_mode` (`none`/`http`, version 5) and
-`mode` (`default`/`unshaped`/`unsafe-raw`, version 6). The node runs in
-multi-user mode: each user authenticates with the PSK plus their UUID as the
-user key. Only the sing-box subscription lists Snell nodes, and only for
-sing-box 1.14.0 or later, which sends that user key; a version 5 node is
-written as a version 4 outbound because sing-box has no version 5 client.
+Snell nodes use server `version` 5 or 6. Version 5 supports `obfs_mode`
+(`none`/`http`); version 6 offers `default` or `unshaped`. The admin no longer
+offers `unsafe-raw`, which cannot authenticate independent PSKs.
 
-A Snell node can instead sit behind ShadowTLS v3 (`shadow_tls.enabled`, with
-`shadow_tls.server` as the handshake site and `shadow_tls.server_port`, default
-443), for clients that cannot send a user key. The node then authenticates each
-user by their UUID as the ShadowTLS password, ignores `obfs_mode` and no longer
-accepts user-key clients, so the sing-box subscription leaves it out. Only the
-Clash Meta subscription lists it, as a `snell` proxy with `obfs-opts.mode:
-shadow-tls`, and only when the request's User-Agent carries the mihomo core
-version (`clash.meta/x.y.z`): 1.19.28 or later for a version 5 node, 1.19.34
-or later for version 6. An older core rejects the whole profile, and GUI
-clients report their own version rather than the core's, so they do not
-receive these nodes. The handshake site must support TLS 1.3 and be reachable
-from the node.
+`psk_mode: user` gives every user their UUID as the Snell PSK. No shared
+Snell PSK or client `userkey` is needed. This works with plain Snell and with
+ShadowTLS enabled. New admin forms default to this mode; older saved nodes
+without `psk_mode` keep `shared` mode until explicitly changed.
+
+For independent PSKs, enabling `shadow_tls.enabled` additionally requires
+`shadow_tls.password`, a node-wide shared password (12-255 characters).
+The subscription puts the UUID in `psk` and this shared password in
+`obfs-opts.password`, with ShadowTLS version 3. The outer layer only gates
+access; the inner Snell PSK determines the user for traffic and limits.
+`shadow_tls.server` is a DNS hostname for a reachable TLS 1.3 handshake site;
+`shadow_tls.server_port` defaults to 443. ShadowTLS replaces v5 HTTP obfs.
+
+The legacy `shared` mode retains the node PSK (12-255 bytes): plain Snell
+also needs a per-user `userkey`; legacy ShadowTLS uses the UUID as its
+outer password. This keeps existing nodes working during migration.
+
+Clash Meta subscriptions include independent-PSK nodes both with and without
+ShadowTLS. The request UA must report a recognized mihomo core version:
+1.19.28+ for a v5 node (encoded as client v4), or 1.19.34+ for v6. GUI-only
+version strings cannot establish core capabilities and are filtered.
+Sing-box subscriptions support plain Snell independent PSKs from core 1.14;
+ShadowTLS-wrapped Snell nodes remain omitted from that subscription format.
+
+Upgrade the node and its patched sing-box/sing-snell dependencies before
+selecting independent PSKs in the panel. Existing clients must refresh their
+subscriptions when changing modes or the shared ShadowTLS password. Rotating
+a user's UUID rotates their Snell PSK and revokes their old connections.
+Independent mode does not fall back to the old shared Snell PSK.
 
 Hysteria2 nodes with gecko obfs enabled are likewise sent only to sing-box
 1.14.0 or later and left out of every other subscription format. Gecko uses

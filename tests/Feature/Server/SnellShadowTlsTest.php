@@ -184,4 +184,66 @@ class SnellShadowTlsTest extends TestCase
         }
     }
 
+    public function test_independent_psk_contract_and_plain_mihomo_subscription(): void
+    {
+        $expected = self::UUID;
+        foreach ([5, 6] as $version) {
+            foreach ([false, true] as $shadow) {
+                $node = $shadow ? $this->behindShadowTls($version) : $this->snell($version, null);
+                $node['protocol_settings']['psk_mode'] = 'user';
+                unset($node['protocol_settings']['psk']);
+                if ($shadow) {
+                    $this->assertFalse($this->passes($node), 'Shared ShadowTLS password is required');
+                    $node['protocol_settings']['shadow_tls']['password'] = 'short';
+                    $this->assertFalse($this->passes($node));
+                    $node['protocol_settings']['shadow_tls']['password'] = 'shared-shadowtls-node-password';
+                }
+                $this->assertTrue($this->passes($node));
+                $this->assertSame('user', ServerService::buildNodeConfig(new Server($node))['psk_mode']);
+                $proxy = $this->mihomoProxies([$node], 'clash.meta/1.19.34')['snell'];
+                $this->assertSame($expected, $proxy['psk']);
+                $other = ClashMeta::buildSnell('22222222-2222-4222-8222-222222222222', $node);
+                $this->assertNotSame($proxy['psk'], $other['psk']);
+                $this->assertArrayNotHasKey('userkey', $proxy);
+                $this->assertSame($shadow, isset($proxy['obfs-opts']));
+                if ($shadow) {
+                    $this->assertSame('shared-shadowtls-node-password', $proxy['obfs-opts']['password']);
+                    $this->assertSame('shared-shadowtls-node-password', ServerService::buildNodeConfig(new Server($node))['shadow_tls_password']);
+                } else {
+                    $sb = new SingBox(['uuid' => self::UUID], [$node], 'sing-box', '1.14.0');
+                    $outbound = (new \ReflectionMethod(SingBox::class, 'buildSnell'))->invoke($sb, self::UUID, $node);
+                    $this->assertSame($expected, $outbound['psk']);
+                    $this->assertArrayNotHasKey('userkey', $outbound);
+                }
+                $node['protocol_settings']['mode'] = 'unsafe-raw';
+                $this->assertFalse($this->passes($node));
+            }
+        }
+        $legacy = new Server($this->snell(5, null));
+        $this->assertSame('shared', $legacy->protocol_settings['psk_mode']);
+    }
+
+    public function test_sing_box_snell_gate_prefers_the_actual_core_user_agent(): void
+    {
+        $user = ['uuid' => self::UUID, 'u' => 0, 'd' => 0, 'transfer_enable' => 0, 'expired_at' => null];
+        $node = $this->snell(6, null);
+        $node['protocol_settings']['psk_mode'] = 'user';
+        foreach ([
+            ['sing-box 1.12.0', 'sing-box/1.14.0', false],
+            ['sing-box 1.14.0', 'sing-box/1.12.0', true],
+            ['sing-box 1.14.0', 'sing-box', true],
+            ['sing-box/1.14.0', 'sing-box', true],
+            ['SFM (sing-box v1.14.0)', 'sing-box', true],
+            ['', 'sing-box', false],
+            ['', 'sing-box/1.14.0', true],
+        ] as [$ua, $flag, $expected]) {
+            $request = Request::create('/api/v1/client/subscribe', 'GET', ['flag' => $flag], [], [], ['HTTP_USER_AGENT' => $ua]);
+            $response = app(ClientController::class)->doSubscribe($request, $user, [$node]);
+            $config = json_decode($response->getContent(), true, 512, JSON_THROW_ON_ERROR);
+            $snell = array_values(array_filter($config['outbounds'], fn($out) => $out['type'] === 'snell'));
+            $this->assertCount($expected ? 1 : 0, $snell, $ua . ' / ' . $flag);
+            if ($expected) { $this->assertSame(self::UUID, $snell[0]['psk']); }
+        }
+    }
+
 }

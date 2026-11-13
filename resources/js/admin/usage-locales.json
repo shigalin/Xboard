@@ -55,7 +55,7 @@
         },
         "psk": {
           "label": "预共享密钥 (PSK)",
-          "placeholder": "12-255 字节，全部用户共用",
+          "placeholder": "12-255 字节，仅旧模式使用",
           "generate": "生成随机密钥"
         },
         "obfs_mode": {
@@ -74,7 +74,15 @@
           },
           "server_port": {
             "label": "握手端口"
+          },
+          "password": {
+            "label": "ShadowTLS 共享密码（12-255 字符）"
           }
+        },
+        "psk_mode": {
+          "label": "用户密钥方式",
+          "shared": "共享 PSK（旧模式）",
+          "user": "用户 UUID 作为独立 PSK"
         }
       }
     }
@@ -135,7 +143,7 @@
         },
         "psk": {
           "label": "Pre-shared key (PSK)",
-          "placeholder": "12-255 bytes, shared by all users",
+          "placeholder": "12-255 bytes, legacy mode only",
           "generate": "Generate a random key"
         },
         "obfs_mode": {
@@ -154,7 +162,15 @@
           },
           "server_port": {
             "label": "Handshake port"
+          },
+          "password": {
+            "label": "Shared ShadowTLS password (12-255 characters)"
           }
+        },
+        "psk_mode": {
+          "label": "User keys",
+          "shared": "Shared PSK (legacy)",
+          "user": "User UUID as independent PSK"
         }
       }
     }
@@ -215,7 +231,7 @@
         },
         "psk": {
           "label": "Общий ключ (PSK)",
-          "placeholder": "12-255 байт, общий для всех пользователей",
+          "placeholder": "12–255 байт, только для старого режима",
           "generate": "Сгенерировать случайный ключ"
         },
         "obfs_mode": {
@@ -234,7 +250,15 @@
           },
           "server_port": {
             "label": "Порт рукопожатия"
+          },
+          "password": {
+            "label": "Общий пароль ShadowTLS (12–255 символов)"
           }
+        },
+        "psk_mode": {
+          "label": "Ключи пользователей",
+          "shared": "Общий PSK (старый режим)",
+          "user": "UUID пользователя как отдельный PSK"
         }
       }
     }

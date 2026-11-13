@@ -195,8 +195,10 @@ class ClashMeta extends AbstractProtocol
                 array_push($proxy, self::buildMieru($item['password'], $item));
                 array_push($proxies, $item['name']);
             }
-            // mihomo cannot send a Snell user key, so it only reaches Snell behind ShadowTLS.
-            if ($item['type'] === Server::TYPE_SNELL && data_get($item, 'protocol_settings.shadow_tls.enabled')) {
+            // Independent PSKs work directly; legacy userkey nodes require ShadowTLS.
+            if ($item['type'] === Server::TYPE_SNELL
+                && (data_get($item, 'protocol_settings.shadow_tls.enabled') || data_get($item, 'protocol_settings.psk_mode') === 'user')
+                && $this->supportsSnellShadowTls($item)) {
                 array_push($proxy, self::buildSnell($user['uuid'], $item));
                 array_push($proxies, $item['name']);
             }
@@ -735,7 +737,9 @@ class ClashMeta extends AbstractProtocol
             'type' => 'snell',
             'server' => $server['host'],
             'port' => $server['port'],
-            'psk' => data_get($protocol_settings, 'psk'),
+            'psk' => data_get($protocol_settings, 'psk_mode') === 'user'
+                ? $password
+                : data_get($protocol_settings, 'psk'),
             'udp' => true,
             // One ShadowTLS handshake then carries many requests.
             'reuse' => true,
@@ -743,7 +747,8 @@ class ClashMeta extends AbstractProtocol
                 'mode' => 'shadow-tls',
                 'version' => 3,
                 'host' => data_get($protocol_settings, 'shadow_tls.server'),
-                'password' => $password,
+                'password' => data_get($protocol_settings, 'psk_mode') === 'user'
+                    ? data_get($protocol_settings, 'shadow_tls.password') : $password,
             ],
         ];
         if ((int) data_get($protocol_settings, 'version') === 6) {
@@ -752,6 +757,13 @@ class ClashMeta extends AbstractProtocol
         } else {
             // A v5 server speaks the v4 wire protocol.
             $array['version'] = 4;
+        }
+        if (!data_get($protocol_settings, 'shadow_tls.enabled')) {
+            unset($array['obfs-opts']);
+            if ((int) data_get($protocol_settings, 'version') === 5
+                && data_get($protocol_settings, 'obfs_mode') === 'http') {
+                $array['obfs-opts'] = ['mode' => 'http'];
+            }
         }
         return $array;
     }

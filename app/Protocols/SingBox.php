@@ -137,6 +137,8 @@ class SingBox extends AbstractProtocol
     {
         $outbounds = $this->config['outbounds'];
         $proxies = [];
+        $coreVersion = $this->getSingBoxCoreVersion();
+        $supportsSnell = $coreVersion !== null && version_compare($coreVersion, '1.14.0', '>=');
         foreach ($this->servers as $item) {
             $protocol_settings = $item['protocol_settings'];
             if ($item['type'] === Server::TYPE_SHADOWSOCKS) {
@@ -179,7 +181,7 @@ class SingBox extends AbstractProtocol
                 $proxies[] = $httpConfig;
             }
             // An older core rejects the whole profile on an unknown outbound type.
-            if ($item['type'] === Server::TYPE_SNELL && $this->supportsFeature('sing-box', '1.14.0')) {
+            if ($item['type'] === Server::TYPE_SNELL && $supportsSnell) {
                 $proxies[] = $this->buildSnell($this->user['uuid'], $item);
             }
         }
@@ -356,7 +358,7 @@ class SingBox extends AbstractProtocol
     {
         // 优先从 UA 提取核心版本
         if (!empty($this->userAgent)) {
-            if (preg_match('/sing-box\s+v?(\d+(?:\.\d+){0,2})/i', $this->userAgent, $matches)) {
+            if (preg_match('/sing-box[\s\/]+v?(\d+(?:\.\d+){0,2})/i', $this->userAgent, $matches)) {
                 return $matches[1];
             }
         }
@@ -759,6 +761,10 @@ class SingBox extends AbstractProtocol
             // sing-box has no v5 client: a v5 server speaks the v4 wire protocol.
             $array['version'] = 4;
             $array['obfs_mode'] = data_get($protocol_settings, 'obfs_mode', 'none');
+        }
+        if (data_get($protocol_settings, 'psk_mode') === 'user') {
+            $array['psk'] = $userKey;
+            unset($array['userkey']);
         }
         return $array;
     }

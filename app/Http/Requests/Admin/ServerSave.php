@@ -108,10 +108,11 @@ class ServerSave extends FormRequest
             'padding_scheme' => 'nullable|array',
         ],
         'snell' => [
+            'psk_mode' => 'nullable|string|in:shared,user',
             'version' => 'required|integer|in:5,6',
             'psk' => 'required|string',
             'obfs_mode' => 'nullable|string|in:none,http',
-            'mode' => 'nullable|string|in:default,unshaped,unsafe-raw',
+            'mode' => 'nullable|string|in:default,unshaped',
             'shadow_tls' => 'nullable|array',
             'shadow_tls.enabled' => 'nullable|boolean',
             'shadow_tls.server' => 'required_if:protocol_settings.shadow_tls.enabled,true,1|nullable|string|max:253',
@@ -198,6 +199,10 @@ class ServerSave extends FormRequest
                 $this->buildTlsObjectRules(includeRoot: true),
             ),
             'snell' => array_merge($rules, [
+                'shadow_tls.password' => [
+                    $this->input('protocol_settings.psk_mode') === 'user' && $this->boolean('protocol_settings.shadow_tls.enabled') ? 'required' : 'nullable',
+                    'string', 'min:12', 'max:255',
+                ],
                 // This value is both the handshake target and the client's SNI.
                 // Accept ASCII DNS hostnames (IDNs must use Punycode), not URLs or IP literals.
                 'shadow_tls.server' => [
@@ -211,7 +216,7 @@ class ServerSave extends FormRequest
                     },
                 ],
                 // Snell v6 rejects a PSK outside 12..255 bytes; min/max would count characters.
-                'psk' => ['required', 'string', function ($attribute, $value, $fail) {
+                'psk' => ['required_unless:protocol_settings.psk_mode,user', 'nullable', 'string', function ($attribute, $value, $fail) {
                     $bytes = is_string($value) ? strlen($value) : 0;
                     if ($bytes < 12 || $bytes > 255) {
                         $fail('The PSK must be 12 to 255 bytes long.');

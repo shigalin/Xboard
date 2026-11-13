@@ -388,6 +388,7 @@ class ServerService
                 'traffic_pattern' => $protocolSettings['traffic_pattern'],
             ],
             'snell' => [
+                'psk_mode' => data_get($protocolSettings, 'psk_mode', 'shared'),
                 ...$baseConfig,
                 'server_port' => (int) $serverPort,
                 'version' => (int) $protocolSettings['version'],
@@ -400,6 +401,7 @@ class ServerService
                 ...(data_get($protocolSettings, 'shadow_tls.enabled') ? [
                     'shadow_tls_server' => data_get($protocolSettings, 'shadow_tls.server'),
                     'shadow_tls_port' => (int) data_get($protocolSettings, 'shadow_tls.server_port', 443),
+                    ...(data_get($protocolSettings, 'psk_mode') === 'user' ? ['shadow_tls_password' => data_get($protocolSettings, 'shadow_tls.password')] : []),
                 ] : []),
             ],
             default => [],
