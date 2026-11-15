@@ -47,6 +47,21 @@
       "download": "实际下载",
       "deleted": "已删除"
     },
+    "onlineUsers": {
+      "title": "节点在线用户",
+      "view": "查看 {{name}} 的在线用户（上报 {{reported}} 人）",
+      "description": "展示近 5 分钟节点上报的在线用户；列表人数可能与流量上报产生的节点在线人数不同。子节点使用父节点的上报数据。",
+      "summary": "当前在线用户：{{count}} 人 · 最近流量上报人数：{{reported}} 人",
+      "loading": "正在加载在线用户…",
+      "loadError": "在线用户加载失败",
+      "retry": "重试",
+      "refresh": "刷新",
+      "empty": "当前暂无在线用户；节点未上报在线设备或记录已超过 5 分钟时也会显示为空。",
+      "id": "用户 ID",
+      "email": "邮箱",
+      "ipCount": "在线 IP 数",
+      "lastSeen": "最近上报时间"
+    },
     "nodeForm": {
       "gecko": "Gecko",
       "snell": {
@@ -136,6 +151,21 @@
       "download": "Raw download",
       "deleted": "Deleted"
     },
+    "onlineUsers": {
+      "title": "Online users on this node",
+      "view": "View online users on {{name}} ({{reported}} reported)",
+      "description": "Users reported by the node in the last 5 minutes. This can differ from the node count based on traffic reports. Child nodes use the parent node's reports.",
+      "summary": "Currently online: {{count}} users · Latest traffic report: {{reported}} users",
+      "loading": "Loading online users…",
+      "loadError": "Unable to load online users",
+      "retry": "Retry",
+      "refresh": "Refresh",
+      "empty": "No online users. The node may not have reported devices, or its records are over 5 minutes old.",
+      "id": "User ID",
+      "email": "Email",
+      "ipCount": "Online IPs",
+      "lastSeen": "Last reported"
+    },
     "nodeForm": {
       "gecko": "Gecko",
       "snell": {
@@ -224,6 +254,21 @@
       "upload": "Отправлено",
       "download": "Получено",
       "deleted": "Удалён"
+    },
+    "onlineUsers": {
+      "title": "Пользователи узла онлайн",
+      "view": "Пользователи онлайн на узле {{name}} (по отчёту: {{reported}})",
+      "description": "Пользователи по отчётам узла за последние 5 минут. Число может отличаться от счётчика по отчётам о трафике. Дочерние узлы используют отчёты родительского узла.",
+      "summary": "Сейчас онлайн: {{count}} · Последний отчёт о трафике: {{reported}}",
+      "loading": "Загрузка пользователей…",
+      "loadError": "Не удалось загрузить пользователей",
+      "retry": "Повторить",
+      "refresh": "Обновить",
+      "empty": "Нет пользователей онлайн. Узел ещё не сообщил об устройствах или записи старше 5 минут.",
+      "id": "ID пользователя",
+      "email": "Почта",
+      "ipCount": "IP онлайн",
+      "lastSeen": "Последний отчёт"
     },
     "nodeForm": {
       "gecko": "Gecko",

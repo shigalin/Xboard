@@ -645,6 +645,70 @@ LUA;
         return $result;
     }
 
+    /**
+     * Read fresh per-node user summaries without changing device state or TTLs.
+     * Reports already maintain the node index; do not trigger the legacy
+     * all-user index migration from this administrator query.
+     *
+     * @return array<int, array{online_ip_count: int, last_seen_at: int}>
+     */
+    public function getNodeOnlineUserStates(int $nodeId): array
+    {
+        $prefix = "{$nodeId}:";
+        $now = time();
+        $result = [];
+        $seen = [];
+        $cursor = null;
+
+        do {
+            $scan = Redis::sscan(self::INDEX_PREFIX . $nodeId, $cursor, ['count' => self::SYNC_BATCH_SIZE]);
+            if ($scan === false) {
+                break;
+            }
+            [$cursor, $members] = $scan;
+            foreach (array_chunk($members, self::SYNC_BATCH_SIZE) as $batch) {
+                $userIds = [];
+                foreach ($batch as $member) {
+                    if (!ctype_digit((string) $member) || (int) $member <= 0 || isset($seen[(int) $member])) {
+                        continue;
+                    }
+                    $userId = (int) $member;
+                    $seen[$userId] = true;
+                    $userIds[] = $userId;
+                }
+                if ($userIds === []) {
+                    continue;
+                }
+                $rows = Redis::pipeline(function ($pipe) use ($userIds): void {
+                    foreach ($userIds as $userId) {
+                        $pipe->hgetall(self::PREFIX . $userId);
+                    }
+                });
+                foreach ($userIds as $index => $userId) {
+                    $ips = [];
+                    $lastSeenAt = 0;
+                    foreach ($rows[$index] ?? [] as $field => $timestamp) {
+                        if (str_starts_with($field, $prefix) && $now - (int) $timestamp <= self::TTL) {
+                            $ip = substr($field, strlen($prefix));
+                            if ($ip !== '') {
+                                $ips[$ip] = true;
+                                $lastSeenAt = max($lastSeenAt, (int) $timestamp);
+                            }
+                        }
+                    }
+                    if ($ips !== []) {
+                        $result[$userId] = [
+                            'online_ip_count' => count($ips),
+                            'last_seen_at' => $lastSeenAt,
+                        ];
+                    }
+                }
+            }
+        } while ((int) $cursor !== 0);
+
+        return $result;
+    }
+
     public function getNodeSequence(int $nodeId): int
     {
         return (int) Redis::get(self::SEQUENCE_PREFIX . $nodeId);

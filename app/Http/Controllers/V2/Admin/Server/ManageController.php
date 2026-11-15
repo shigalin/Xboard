@@ -7,6 +7,8 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\ServerSave;
 use App\Models\Server;
 use App\Models\ServerGroup;
+use App\Models\User;
+use App\Services\DeviceStateService;
 use App\Services\ServerService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +24,47 @@ class ManageController extends Controller
             return $item;
         });
         return $this->success($servers);
+    }
+
+    public function getOnlineUsers(Request $request, DeviceStateService $devices)
+    {
+        $params = $request->validate([
+            'id' => 'required|integer|min:1',
+        ]);
+        $server = Server::find($params['id']);
+        if (!$server) {
+            return $this->fail([400202, '服务器不存在']);
+        }
+
+        // Match Server::online's immediate parent fallback, not child-node IDs
+        // or a recursive aggregation of all servers on the same machine.
+        $sourceNodeId = (int) ($server->parent_id ?: $server->id);
+        if ($server->parent_id && !Server::whereKey($sourceNodeId)->exists()) {
+            return $this->fail([400202, '父节点不存在']);
+        }
+
+        $states = $devices->getNodeOnlineUserStates($sourceNodeId);
+        $list = [];
+        if ($states !== []) {
+            foreach (User::query()->whereIntegerInRaw('id', array_keys($states))
+                ->orderBy('id')->toBase()->get(['id', 'email']) as $user) {
+                $list[] = [
+                    'id' => (int) $user->id,
+                    'email' => $user->email,
+                    'online_ip_count' => $states[(int) $user->id]['online_ip_count'],
+                    'last_seen_at' => $states[(int) $user->id]['last_seen_at'],
+                ];
+            }
+        }
+
+        return $this->success([
+            'list' => $list,
+            'total' => count($list),
+            // The existing count is a traffic report snapshot, not the fresh
+            // device-user count. Keep both explicit instead of equating them.
+            'reported_online' => (int) $server->online,
+            'source_node_id' => $sourceNodeId,
+        ]);
     }
 
     public function sort(Request $request)

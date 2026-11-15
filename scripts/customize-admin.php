@@ -100,6 +100,10 @@ try {
         . 'cell:({row:e})=>Q.jsx("div",{className:"truncate",style:{maxWidth:"160px"},title:e.original.remarks||"",children:e.original.remarks||"—"}),'
         . 'enableSorting:!1,enableHiding:!1,size:160},' . substr($bundle, $registerStart);
 
+    $bundle = replaceAdminFragment($bundle,
+        'cell:({row:e})=>Q.jsxs("div",{className:"flex items-center space-x-2 px-4",children:[Q.jsx(Olt,{className:"size-4"}),Q.jsx("span",{className:"font-medium",children:e.getValue("online")})]})',
+        'cell:({row:e})=>Q.jsx(XboardNodeOnlineUsers,{node:e.original})');
+
     // Sort nodes by the same upload + download byte total shown in the cell.
     $bundle = replaceAdminFragment($bundle,
         '{id:"traffic",header:({column:e})=>Q.jsx(eQt,{column:e,title:t("columns.traffic.title"),tooltip:t("columns.traffic.tooltip")})',
@@ -134,6 +138,7 @@ try {
         . "  resources.dashboard.usage = additions.usage;\n"
         . "  resources.user.onlineIPs = additions.onlineIPs;\n"
         . "  resources.user.nodeTraffic = additions.nodeTraffic;\n"
+        . "  resources.server.onlineUsers = additions.onlineUsers;\n"
         . "  resources.server.dynamic_form.hysteria.obfs.type.gecko = additions.nodeForm.gecko;\n"
         . "  resources.server.dynamic_form.snell = additions.nodeForm.snell;\n}\n";
     $components = file_get_contents($root . '/resources/js/admin/usage-components.js');

@@ -228,6 +228,77 @@ function XboardNodeTraffic({ user }) {
   );
 }
 
+function XboardNodeOnlineUsers({ node }) {
+  const h = H.createElement;
+  const { t } = jy('server');
+  const mobile = p8e();
+  const [open, setOpen] = H.useState(false);
+  // Keep the dialog on the node that was opened, even if the row data behind
+  // this cell changes on a list refresh.
+  const [target, setTarget] = H.useState({ opening: 0 });
+  const instanceId = H.useId();
+  const reported = node.online ?? 0;
+  const focusTitle = H.useCallback((element) => element?.focus(), []);
+  const { data, isFetching, isError, refetch } = pC({
+    // Keep the current result through the exit animation. Reopening uses a new key.
+    queryKey: ['nodeOnlineUsers', target.id, instanceId, target.opening],
+    queryFn: async () => {
+      const response = await IL(OL() + '/server/manage/getOnlineUsers', { params: { id: target.id } });
+      return response.data;
+    },
+    enabled: open,
+    staleTime: 0,
+    gcTime: 0,
+  });
+  let content;
+  if (isError && !isFetching) content = h('div', { className: 'space-y-4 py-8 text-center', role: 'alert' },
+    h('p', null, t('onlineUsers.loadError')),
+    h(xtt, { variant: 'outline', onClick: () => refetch() }, t('onlineUsers.retry')));
+  else if (!data) content = h('p', { className: 'py-8 text-center text-muted-foreground', role: 'status' }, t('onlineUsers.loading'));
+  else content = h('div', { className: 'space-y-4' },
+    h('p', { className: 'text-sm' }, t('onlineUsers.summary', { count: data.total, reported: data.reported_online })),
+    !data.list.length ? h('p', { className: 'py-8 text-center text-muted-foreground' }, t('onlineUsers.empty'))
+      : h('div', { style: { maxHeight: mobile ? undefined : 'min(60vh, 480px)', overflow: 'auto' } },
+        h('table', { className: 'w-full text-sm', style: { minWidth: '600px' } },
+          h('thead', null, h('tr', { className: 'border-b text-left text-muted-foreground' },
+            ...['id', 'email', 'ipCount', 'lastSeen'].map((key) => h('th', { key, className: 'whitespace-nowrap p-3' }, t('onlineUsers.' + key))))),
+          h('tbody', null, data.list.map((user) => h('tr', { key: user.id, className: 'border-b' },
+            h('td', { className: 'p-3 font-mono' }, user.id),
+            h('td', { className: 'break-all p-3' }, user.email),
+            h('td', { className: 'p-3' }, user.online_ip_count),
+            h('td', { className: 'whitespace-nowrap p-3' }, SS(user.last_seen_at))
+          ))))));
+
+  return h(htt, {
+    open,
+    onOpenChange: (next) => {
+      if (next) setTarget((value) => ({ id: node.id, name: node.name, opening: value.opening + 1 }));
+      setOpen(next);
+    },
+  },
+    h(gtt, { asChild: true }, h('button', {
+      type: 'button',
+      className: 'flex cursor-pointer items-center space-x-2 rounded px-4 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+      'aria-label': t('onlineUsers.view', { name: node.name, reported }),
+      onClick: (event) => {
+        event.stopPropagation();
+        event.currentTarget.blur();
+      },
+    }, h(Olt, { className: 'size-4' }),
+    h('span', { className: 'font-medium underline decoration-dotted underline-offset-4' }, reported))),
+    h(ptt, { className: 'max-w-2xl', drawerClassName: 'overflow-hidden', style: { maxHeight: '90vh', overflowY: 'auto' } },
+      h(mtt, { className: 'shrink-0' },
+        h(_tt, { ref: focusTitle, tabIndex: -1, className: 'outline-none' }, t('onlineUsers.title')),
+        h(vtt, { className: 'break-all text-sm text-muted-foreground' }, target.name + ' · ' + t('onlineUsers.description'))),
+      h('div', { className: mobile ? 'flex min-h-0 flex-col gap-4' : 'space-y-4', style: { minWidth: 0, padding: mobile ? '0 16px 16px' : undefined } },
+        h('div', { className: mobile ? 'min-h-0 overflow-y-auto' : undefined }, content),
+        h('div', { className: 'flex shrink-0 justify-end gap-2' },
+          h(xtt, { variant: 'outline', disabled: isFetching, onClick: () => refetch() }, t('onlineUsers.refresh')),
+          h(xtt, { variant: 'outline', onClick: () => setOpen(false) }, t('common:close'))))
+    )
+  );
+}
+
 // Snell node settings. `version` is the server version (5 or 6). In user PSK
 // mode each UUID is that user's Snell PSK and optional ShadowTLS uses a
 // node-wide password. In shared (legacy) mode all users share the node PSK and
