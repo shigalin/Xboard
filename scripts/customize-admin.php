@@ -100,6 +100,15 @@ try {
         . 'cell:({row:e})=>Q.jsx("div",{className:"truncate",style:{maxWidth:"160px"},title:e.original.remarks||"",children:e.original.remarks||"—"}),'
         . 'enableSorting:!1,enableHiding:!1,size:160},' . substr($bundle, $registerStart);
 
+    // Preserve the expiry badge and its tooltip; copy the full date/time (or
+    // the permanent label) with the same clipboard helper as the email cell.
+    $bundle = replaceAdminFragment($bundle,
+        'Q.jsx(Xot,{className:"block w-full",children:Q.jsx(nKt',
+        'Q.jsx(Xot,{type:"button",className:"block w-full cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",'
+        . '"aria-label":r("copyExpiry",{value:null==t?r("columns.expire_status.permanent"):SS(t)}),'
+        . 'onClick:async e=>{e.stopPropagation();const n=await IS(null==t?r("columns.expire_status.permanent"):SS(t));'
+        . 'gE[n?"success":"error"](r(n?"common:copy.success":"common:copy.failed"))},children:Q.jsx(nKt');
+
     $bundle = replaceAdminFragment($bundle,
         'cell:({row:e})=>Q.jsxs("div",{className:"flex items-center space-x-2 px-4",children:[Q.jsx(Olt,{className:"size-4"}),Q.jsx("span",{className:"font-medium",children:e.getValue("online")})]})',
         'cell:({row:e})=>Q.jsx(XboardNodeOnlineUsers,{node:e.original})');
@@ -138,6 +147,7 @@ try {
         . "  resources.dashboard.usage = additions.usage;\n"
         . "  resources.user.onlineIPs = additions.onlineIPs;\n"
         . "  resources.user.nodeTraffic = additions.nodeTraffic;\n"
+        . "  resources.user.copyExpiry = additions.copyExpiry;\n"
         . "  resources.server.onlineUsers = additions.onlineUsers;\n"
         . "  resources.server.dynamic_form.hysteria.obfs.type.gecko = additions.nodeForm.gecko;\n"
         . "  resources.server.dynamic_form.snell = additions.nodeForm.snell;\n}\n";

@@ -47,6 +47,7 @@
       "download": "实际下载",
       "deleted": "已删除"
     },
+    "copyExpiry": "复制到期时间：{{value}}",
     "onlineUsers": {
       "title": "节点在线用户",
       "view": "查看 {{name}} 的在线用户（上报 {{reported}} 人）",
@@ -151,6 +152,7 @@
       "download": "Raw download",
       "deleted": "Deleted"
     },
+    "copyExpiry": "Copy expiry time: {{value}}",
     "onlineUsers": {
       "title": "Online users on this node",
       "view": "View online users on {{name}} ({{reported}} reported)",
@@ -255,6 +257,7 @@
       "download": "Получено",
       "deleted": "Удалён"
     },
+    "copyExpiry": "Копировать срок действия: {{value}}",
     "onlineUsers": {
       "title": "Пользователи узла онлайн",
       "view": "Пользователи онлайн на узле {{name}} (по отчёту: {{reported}})",
