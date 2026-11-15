@@ -121,6 +121,12 @@ try {
         '},size:120,enableSorting:!1,enableHiding:!0},{id:"actions"',
         '},size:120,enableSorting:!0,enableHiding:!0},{id:"actions"');
 
+    // Key node rows by node ID so selections and per-row state follow the node
+    // when the 30s list refresh changes the order.
+    $bundle = replaceAdminFragment($bundle,
+        'NGt({data:_||[],columns:Z5t(w,e,b),',
+        'NGt({data:_||[],columns:Z5t(w,e,b),getRowId:e=>String(e.id),');
+
     // Hysteria2 gecko obfs and the Snell node type; the form lives in
     // usage-components.js. Function declarations there are hoisted, so the
     // protocol registry can call them while the bundle is still evaluating.
