@@ -141,9 +141,10 @@ need not agree.
 
 This query reads the node's existing Redis index and device hashes only. It
 does not refresh TTLs, remove stale entries, change device state, or initiate
-the legacy all-user index migration. After an upgrade, restart the WebSocket
-worker so its startup migration can run; full device snapshots also invoke
-the existing per-node index backfill while migration is incomplete. Until the
+the legacy all-user index migration. For deployments using a WebSocket worker,
+restart that worker after an upgrade so its startup migration can run.
+Full device snapshots also invoke the existing per-node index backfill while
+migration is incomplete. Until the
 index is populated, this view can be incomplete or empty even when the reported
 count is positive. The empty-state text includes this possibility alongside
 missing device reports and records older than five minutes.
@@ -156,9 +157,12 @@ Large indices or hashes can still increase memory use, SQL size, latency and
 browser rendering cost; no tested capacity threshold is claimed.
 
 The dialog fetches on opening and supports refresh and retry. Its query is
-disabled while closed; it has no polling interval, although the query client's
-normal stale-query focus/reconnect behavior still applies while open. Closing
-cancels the request through the query client's AbortSignal; reopening uses a
+disabled while closed and has no polling interval. Stale queries can refetch
+on reconnect while open, but window-focus refetch is disabled globally in this
+pinned build (`refetchOnWindowFocus: false`). The global `retry: 1` setting also
+applies: a failed request is retried once automatically before the error state
+is shown. Closing cancels the request through the query client's AbortSignal;
+reopening uses a
 new query key. Stable cell components and node-ID row keys preserve the opened
 node and dialog across list refreshes and reordering. Removing or filtering
 out its row, or switching between desktop and mobile list layouts, can still
@@ -185,10 +189,12 @@ in-memory database name. Relative file paths still resolve under the project
 root. No repository-root `:memory:` file is required or ignored.
 
 With PHP 8.2+ and the project's development dependencies installed, run these
-checks in an isolated test environment (not against a production database):
+checks in an isolated test environment (not against a production database).
+The command generates an ephemeral application key for this test process only.
 
 ```sh
-APP_ENV=testing DB_CONNECTION=sqlite DB_DATABASE=:memory: CACHE_DRIVER=array \
+APP_KEY="$(php -r 'echo "base64:" . base64_encode(random_bytes(32));')" \
+  APP_ENV=testing DB_CONNECTION=sqlite DB_DATABASE=:memory: CACHE_DRIVER=array \
   SESSION_DRIVER=array QUEUE_CONNECTION=sync LOG_CHANNEL=stderr \
   vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php \
   --do-not-cache-result tests/Unit/SqliteDatabaseConfigTest.php \
