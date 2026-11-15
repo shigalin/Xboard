@@ -109,9 +109,17 @@ try {
         . 'onClick:async e=>{e.stopPropagation();const n=await IS(null==t?r("columns.expire_status.permanent"):SS(t));'
         . 'gE[n?"success":"error"](r(n?"common:copy.success":"common:copy.failed"))},children:Q.jsx(nKt');
 
+    // The node columns are rebuilt on every render and flexRender treats a
+    // function cell as a component type; an inline cell would remount, and
+    // close, the dialog on each 30s list refresh.
     $bundle = replaceAdminFragment($bundle,
         'cell:({row:e})=>Q.jsxs("div",{className:"flex items-center space-x-2 px-4",children:[Q.jsx(Olt,{className:"size-4"}),Q.jsx("span",{className:"font-medium",children:e.getValue("online")})]})',
-        'cell:({row:e})=>Q.jsx(XboardNodeOnlineUsers,{node:e.original})');
+        'cell:XboardNodeOnlineUsersCell');
+
+    // Requests cancelled by their caller are not failures to report.
+    $bundle = replaceAdminFragment($bundle,
+        'TL.interceptors.response.use(e=>e?.data||{code:-1,message:lL.t("common:http.unknownError")},e=>{',
+        'TL.interceptors.response.use(e=>e?.data||{code:-1,message:lL.t("common:http.unknownError")},e=>{if(BN.isCancel(e))return Promise.reject(e);');
 
     // Sort nodes by the same upload + download byte total shown in the cell.
     $bundle = replaceAdminFragment($bundle,

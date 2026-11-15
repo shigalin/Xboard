@@ -228,10 +228,15 @@ function XboardNodeTraffic({ user }) {
   );
 }
 
+function XboardNodeOnlineUsersCell({ row }) {
+  return H.createElement(XboardNodeOnlineUsers, { node: row.original });
+}
+
 function XboardNodeOnlineUsers({ node }) {
   const h = H.createElement;
   const { t } = jy('server');
   const mobile = p8e();
+  const queryClient = lC();
   const [open, setOpen] = H.useState(false);
   // Keep the dialog on the node that was opened, even if the row data behind
   // this cell changes on a list refresh.
@@ -239,11 +244,12 @@ function XboardNodeOnlineUsers({ node }) {
   const instanceId = H.useId();
   const reported = node.online ?? 0;
   const focusTitle = H.useCallback((element) => element?.focus(), []);
+  // Keep the current result through the exit animation. Reopening uses a new key.
+  const queryKey = ['nodeOnlineUsers', target.id, instanceId, target.opening];
   const { data, isFetching, isError, refetch } = pC({
-    // Keep the current result through the exit animation. Reopening uses a new key.
-    queryKey: ['nodeOnlineUsers', target.id, instanceId, target.opening],
-    queryFn: async () => {
-      const response = await IL(OL() + '/server/manage/getOnlineUsers', { params: { id: target.id } });
+    queryKey,
+    queryFn: async ({ signal }) => {
+      const response = await IL(OL() + '/server/manage/getOnlineUsers', { params: { id: target.id }, signal });
       return response.data;
     },
     enabled: open,
@@ -268,14 +274,14 @@ function XboardNodeOnlineUsers({ node }) {
             h('td', { className: 'p-3' }, user.online_ip_count),
             h('td', { className: 'whitespace-nowrap p-3' }, SS(user.last_seen_at))
           ))))));
+  const changeOpen = (next) => {
+    if (next) setTarget((value) => ({ id: node.id, name: node.name, opening: value.opening + 1 }));
+    // An abandoned request can hold the browser connection the next opening needs.
+    else queryClient.cancelQueries({ queryKey, exact: true });
+    setOpen(next);
+  };
 
-  return h(htt, {
-    open,
-    onOpenChange: (next) => {
-      if (next) setTarget((value) => ({ id: node.id, name: node.name, opening: value.opening + 1 }));
-      setOpen(next);
-    },
-  },
+  return h(htt, { open, onOpenChange: changeOpen },
     h(gtt, { asChild: true }, h('button', {
       type: 'button',
       className: 'flex cursor-pointer items-center space-x-2 rounded px-4 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
@@ -294,7 +300,7 @@ function XboardNodeOnlineUsers({ node }) {
         h('div', { className: mobile ? 'min-h-0 overflow-y-auto' : undefined }, content),
         h('div', { className: 'flex shrink-0 justify-end gap-2' },
           h(xtt, { variant: 'outline', disabled: isFetching, onClick: () => refetch() }, t('onlineUsers.refresh')),
-          h(xtt, { variant: 'outline', onClick: () => setOpen(false) }, t('common:close'))))
+          h(xtt, { variant: 'outline', onClick: () => changeOpen(false) }, t('common:close'))))
     )
   );
 }
