@@ -1,4 +1,4 @@
-# Usage overview, online IPs and node traffic
+# Admin customizations
 
 The upstream `.gitmodules` points to `cedar2025/xboard-admin-dist`, which only
 contains compiled admin assets. This checkout pins build `a260c84d` (dist commit
@@ -119,6 +119,89 @@ hides old cached totals during the fetch.
 Deploy the migration before restarting queue workers on the new code, then run
 the admin customization script (the existing update/build scripts do this).
 Old workers do not record node detail, so their traffic remains unattributed.
+
+## Online users by node
+
+Clicking a node's online-count cell opens `GET
+/api/v2/{secure_path}/server/manage/getOnlineUsers?id=...`. Only administrators
+may use this endpoint; ordinary users and staff receive 403. The ID must be a
+positive integer (422 otherwise); a missing node or missing immediate parent
+returns 400. Child nodes read their immediate parent's device index, matching
+the ID fallback used by the existing online-count accessor. This is not a
+recursive traversal or an aggregation of child nodes.
+
+The response contains `list` (`id`, `email`, `online_ip_count`, `last_seen_at`),
+`total` (the number of returned users), `reported_online` (the existing traffic
+report count), and `source_node_id` (the index being read). Users are ordered by
+ID; deleted users are omitted. A user is included when the node has at least
+one nonempty IP field no more than 300 seconds old. IPs are deduplicated within
+that node, and `last_seen_at` is the latest included timestamp, in Unix seconds.
+The fresh-device count and traffic-report count have different sources and
+need not agree.
+
+This query reads the node's existing Redis index and device hashes only. It
+does not refresh TTLs, remove stale entries, change device state, or initiate
+the legacy all-user index migration. After an upgrade, restart the WebSocket
+worker so its startup migration can run; full device snapshots also invoke
+the existing per-node index backfill while migration is incomplete. Until the
+index is populated, this view can be incomplete or empty even when the reported
+count is positive. The empty-state text includes this possibility alongside
+missing device reports and records older than five minutes.
+
+Redis hash reads are pipelined in batches of at most 200 users, but the overall
+query and response are not paginated or capped. It scans the entire node index,
+reads each indexed user's device hash, and performs one integer-literal SQL
+`IN` query for fresh users. These IDs are not individual bound parameters.
+Large indices or hashes can still increase memory use, SQL size, latency and
+browser rendering cost; no tested capacity threshold is claimed.
+
+The dialog fetches on opening and supports refresh and retry. Its query is
+disabled while closed; it has no polling interval, although the query client's
+normal stale-query focus/reconnect behavior still applies while open. Closing
+cancels the request through the query client's AbortSignal; reopening uses a
+new query key. Stable cell components and node-ID row keys preserve the opened
+node and dialog across list refreshes and reordering. Removing or filtering
+out its row, or switching between desktop and mobile list layouts, can still
+unmount the dialog.
+
+The shared Axios response interceptor silently rejects cancellation errors
+instead of displaying an error toast or converting them into generic errors.
+This applies to all management requests using that client; ordinary errors
+retain their existing handling. It does not cancel server-side work already
+started by an abandoned HTTP request.
+
+## Copy user expiry
+
+The user's expiry badge retains its tooltip and becomes a keyboard-accessible
+copy button. It copies the full date/time using the existing display formatter,
+or the localized permanent label for an unlimited expiry. The existing email
+clipboard helper and success/failure notifications are reused. Labels are
+provided in Chinese, English and Russian.
+
+## Local verification
+
+SQLite configuration preserves `DB_DATABASE=:memory:` as SQLite's special
+in-memory database name. Relative file paths still resolve under the project
+root. No repository-root `:memory:` file is required or ignored.
+
+With PHP 8.2+ and the project's development dependencies installed, run these
+checks in an isolated test environment (not against a production database):
+
+```sh
+APP_ENV=testing DB_CONNECTION=sqlite DB_DATABASE=:memory: CACHE_DRIVER=array \
+  SESSION_DRIVER=array QUEUE_CONNECTION=sync LOG_CHANNEL=stderr \
+  vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php \
+  --do-not-cache-result tests/Unit/SqliteDatabaseConfigTest.php \
+  tests/Unit/Services/NodeOnlineUserStatesTest.php \
+  tests/Feature/Admin/NodeOnlineUsersTest.php
+php scripts/customize-admin.php
+```
+
+Browser checks should exercise the generated bundle: opening, empty/error
+states and retry, closing an in-flight request, reopening, list refresh and
+reordering, narrow-screen layout, and expiry copying. Mocked API responses can
+exercise frontend branches, but do not replace the backend feature tests or
+deployment validation.
 
 ## Snell nodes and Hysteria2 gecko obfs
 

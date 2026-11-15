@@ -32,4 +32,3 @@ compose.yaml
 compose.host.yaml
 compose.split.yaml
 .scribe
-/:memory:
