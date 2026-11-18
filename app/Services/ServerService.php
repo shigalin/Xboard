@@ -401,7 +401,8 @@ class ServerService
                 ...(data_get($protocolSettings, 'shadow_tls.enabled') ? [
                     'shadow_tls_server' => data_get($protocolSettings, 'shadow_tls.server'),
                     'shadow_tls_port' => (int) data_get($protocolSettings, 'shadow_tls.server_port', 443),
-                    ...(data_get($protocolSettings, 'psk_mode') === 'user' ? ['shadow_tls_password' => data_get($protocolSettings, 'shadow_tls.password')] : []),
+                    ...(in_array(data_get($protocolSettings, 'psk_mode'), ['user', 'shared_userkey'], true)
+                        ? ['shadow_tls_password' => data_get($protocolSettings, 'shadow_tls.password')] : []),
                 ] : []),
             ],
             default => [],

@@ -195,10 +195,10 @@ class ClashMeta extends AbstractProtocol
                 array_push($proxy, self::buildMieru($item['password'], $item));
                 array_push($proxies, $item['name']);
             }
-            // Independent PSKs work directly; legacy userkey nodes require ShadowTLS.
-            // Both need the core versions supportsSnellShadowTls() checks.
+            // Only list plain Snell modes supported by the reported core.
             if ($item['type'] === Server::TYPE_SNELL
-                && (data_get($item, 'protocol_settings.shadow_tls.enabled') || data_get($item, 'protocol_settings.psk_mode') === 'user')
+                && (data_get($item, 'protocol_settings.shadow_tls.enabled')
+                    || in_array(data_get($item, 'protocol_settings.psk_mode'), ['user', 'shared_userkey'], true))
                 && $this->supportsSnellShadowTls($item)) {
                 array_push($proxy, self::buildSnell($user['uuid'], $item));
                 array_push($proxies, $item['name']);
@@ -716,29 +716,36 @@ class ClashMeta extends AbstractProtocol
     }
 
     /**
-     * mihomo reads Snell over ShadowTLS since 1.19.28 and Snell v6 since
-     * 1.19.34; an older core rejects the whole profile. Only the core reports
-     * its own version (clash.meta/x.y.z), GUI clients report theirs, so they
-     * do not get the node.
+     * Use the reported core version to decide which Snell credentials it supports.
      */
     protected function supportsSnellShadowTls(array $server): bool
     {
+        $v6 = (int) data_get($server, 'protocol_settings.version') === 6;
+        $usesUserkey = data_get($server, 'protocol_settings.psk_mode') === 'shared_userkey';
+        if ($usesUserkey && !$v6) {
+            return false;
+        }
+        // These Alpha revisions include v6 userkey support (mihomo #3460).
+        if (preg_match('#(?:clash\.meta|mihomo)/alpha-(?:d569d9e|3c0d10a|2be2f08)\b#i', (string) $this->userAgent)) {
+            return true;
+        }
         if (!preg_match('#(?:clash\.meta|mihomo)/v?(\d+\.\d+\.\d+)#i', (string) $this->userAgent, $matches)) {
             return false;
         }
-        $required = (int) data_get($server, 'protocol_settings.version') === 6 ? '1.19.34' : '1.19.28';
+        $required = $usesUserkey ? '1.19.35' : ($v6 ? '1.19.34' : '1.19.28');
         return version_compare($matches[1], $required, '>=');
     }
 
     public static function buildSnell($password, $server)
     {
         $protocol_settings = data_get($server, 'protocol_settings', []);
+        $pskMode = data_get($protocol_settings, 'psk_mode');
         $array = [
             'name' => $server['name'],
             'type' => 'snell',
             'server' => $server['host'],
             'port' => $server['port'],
-            'psk' => data_get($protocol_settings, 'psk_mode') === 'user'
+            'psk' => $pskMode === 'user'
                 ? $password
                 : data_get($protocol_settings, 'psk'),
             'udp' => true,
@@ -748,10 +755,16 @@ class ClashMeta extends AbstractProtocol
                 'mode' => 'shadow-tls',
                 'version' => 3,
                 'host' => data_get($protocol_settings, 'shadow_tls.server'),
-                'password' => data_get($protocol_settings, 'psk_mode') === 'user'
-                    ? data_get($protocol_settings, 'shadow_tls.password') : $password,
+                'password' => match ($pskMode) {
+                    'user' => data_get($protocol_settings, 'shadow_tls.password'),
+                    'shared_userkey' => data_get($protocol_settings, 'shadow_tls.password') ?: $password,
+                    default => $password,
+                },
             ],
         ];
+        if ($pskMode === 'shared_userkey') {
+            $array['userkey'] = $password;
+        }
         if ((int) data_get($protocol_settings, 'version') === 6) {
             $array['version'] = 6;
             $array['mode'] = data_get($protocol_settings, 'mode', 'default');

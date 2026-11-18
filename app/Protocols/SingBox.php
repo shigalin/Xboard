@@ -137,7 +137,9 @@ class SingBox extends AbstractProtocol
     {
         $outbounds = $this->config['outbounds'];
         $proxies = [];
+        $shadowTlsOutbounds = [];
         $supportsSnell = $this->supportsCore('1.14.0');
+        $usedTags = array_fill_keys(array_merge(array_column($outbounds, 'tag'), array_column($this->servers, 'name')), true);
         foreach ($this->servers as $item) {
             $protocol_settings = $item['protocol_settings'];
             if ($item['type'] === Server::TYPE_SHADOWSOCKS) {
@@ -181,7 +183,18 @@ class SingBox extends AbstractProtocol
             }
             // An older core rejects the whole profile on an unknown outbound type.
             if ($item['type'] === Server::TYPE_SNELL && $supportsSnell) {
-                $proxies[] = $this->buildSnell($this->user['uuid'], $item);
+                $proxy = $this->buildSnell($this->user['uuid'], $item);
+                if (data_get($protocol_settings, 'shadow_tls.enabled')) {
+                    $tag = $baseTag = $proxy['tag'] . ' · ShadowTLS';
+                    for ($suffix = 2; isset($usedTags[$tag]); $suffix++) {
+                        $tag = $baseTag . ' ' . $suffix;
+                    }
+                    $usedTags[$tag] = true;
+                    $shadowTlsOutbounds[] = $this->buildSnellShadowTls($tag, $item, $this->user['uuid']);
+                    $proxy['detour'] = $tag;
+                    unset($proxy['obfs_mode']);
+                }
+                $proxies[] = $proxy;
             }
         }
         foreach ($outbounds as &$outbound) {
@@ -221,7 +234,7 @@ class SingBox extends AbstractProtocol
         }
         unset($outbound);
 
-        $outbounds = array_merge($outbounds, $proxies);
+        $outbounds = array_merge($outbounds, $proxies, $shadowTlsOutbounds);
         $this->config['outbounds'] = $outbounds;
         return $outbounds;
     }
@@ -751,6 +764,32 @@ class SingBox extends AbstractProtocol
     {
         $coreVersion = $this->getSingBoxCoreVersion();
         return $coreVersion !== null && version_compare($coreVersion, $minVersion, '>=');
+    }
+
+    protected function supportsSnellShadowTls(array $server): bool
+    {
+        return $this->supportsCore('1.14.0')
+            && in_array(data_get($server, 'protocol_settings.psk_mode'), ['user', 'shared_userkey'], true);
+    }
+
+    private function buildSnellShadowTls(string $tag, array $server, string $userKey): array
+    {
+        $password = data_get($server, 'protocol_settings.shadow_tls.password');
+        if (!$password && data_get($server, 'protocol_settings.psk_mode') === 'shared_userkey') {
+            $password = $userKey;
+        }
+        return [
+            'type' => 'shadowtls',
+            'tag' => $tag,
+            'server' => $server['host'],
+            'server_port' => $server['port'],
+            'version' => 3,
+            'password' => $password,
+            'tls' => [
+                'enabled' => true,
+                'server_name' => data_get($server, 'protocol_settings.shadow_tls.server'),
+            ],
+        ];
     }
 
     protected function buildSnell($userKey, $server): array

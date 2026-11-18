@@ -71,7 +71,7 @@
         },
         "psk": {
           "label": "预共享密钥 (PSK)",
-          "placeholder": "12-255 字节，仅旧模式使用",
+          "placeholder": "12-255 字节",
           "generate": "生成随机密钥"
         },
         "obfs_mode": {
@@ -93,12 +93,14 @@
           },
           "password": {
             "label": "ShadowTLS 共享密码（12-255 字符）",
+            "optional": "留空时使用各用户的 UUID",
             "generate": "生成随机密码"
           }
         },
         "psk_mode": {
-          "label": "用户密钥方式",
+          "label": "Snell 用户认证",
           "shared": "共享 PSK（旧模式）",
+          "shared_userkey": "共享 PSK + 用户 UUID 作为 userkey",
           "user": "用户 UUID 作为独立 PSK"
         }
       }
@@ -176,7 +178,7 @@
         },
         "psk": {
           "label": "Pre-shared key (PSK)",
-          "placeholder": "12-255 bytes, legacy mode only",
+          "placeholder": "12-255 bytes",
           "generate": "Generate a random key"
         },
         "obfs_mode": {
@@ -198,12 +200,14 @@
           },
           "password": {
             "label": "Shared ShadowTLS password (12-255 characters)",
+            "optional": "Leave blank to use each user's UUID",
             "generate": "Generate a random password"
           }
         },
         "psk_mode": {
-          "label": "User keys",
+          "label": "Snell user authentication",
           "shared": "Shared PSK (legacy)",
+          "shared_userkey": "Shared PSK + user UUID as userkey",
           "user": "User UUID as independent PSK"
         }
       }
@@ -281,7 +285,7 @@
         },
         "psk": {
           "label": "Общий ключ (PSK)",
-          "placeholder": "12–255 байт, только для старого режима",
+          "placeholder": "12–255 байт",
           "generate": "Сгенерировать случайный ключ"
         },
         "obfs_mode": {
@@ -303,12 +307,14 @@
           },
           "password": {
             "label": "Общий пароль ShadowTLS (12–255 символов)",
+            "optional": "Оставьте пустым, чтобы использовать UUID каждого пользователя",
             "generate": "Сгенерировать случайный пароль"
           }
         },
         "psk_mode": {
-          "label": "Ключи пользователей",
+          "label": "Аутентификация пользователей Snell",
           "shared": "Общий PSK (старый режим)",
+          "shared_userkey": "Общий PSK + UUID пользователя как userkey",
           "user": "UUID пользователя как отдельный PSK"
         }
       }

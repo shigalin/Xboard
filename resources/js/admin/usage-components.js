@@ -305,10 +305,6 @@ function XboardNodeOnlineUsers({ node }) {
   );
 }
 
-// Snell node settings. `version` is the server version (5 or 6). In user PSK
-// mode each UUID is that user's Snell PSK and optional ShadowTLS uses a
-// node-wide password. In shared (legacy) mode all users share the node PSK and
-// authenticate with their UUID as the user key, or as the ShadowTLS password.
 // The fields need defaults: a field the form registers without one changes the
 // form values on mount, and that change is written back over the settings of
 // the node being edited.
@@ -332,6 +328,8 @@ function XboardSnellSchema(routing) {
 function XboardSnellForm({ form, t }) {
   const h = H.createElement;
   const label = (key) => h(Zy, { className: 'text-[12px] font-mono text-foreground/80' }, t(key));
+  const pskMode = form.watch('psk_mode') || 'user';
+  const sharedUserkey = pskMode === 'shared_userkey';
   const select = (name, options, fallback, parse = (value) => value, format = (value) => String(value || fallback)) => h($y, {
     key: name,
     control: form.control,
@@ -342,7 +340,7 @@ function XboardSnellForm({ form, t }) {
         h(yzt, { value: format(field.value), onValueChange: (value) => field.onChange(parse(value)) },
           h(Czt, { className: 'font-mono text-xs' }, h(wzt, null)),
           h(Nzt, null, h(xzt, null, options.map((option) =>
-            h(Lzt, { key: option, value: option, className: 'cursor-pointer' }, option))))))),
+            h(Lzt, { key: option, value: option, className: 'cursor-pointer' }, name === 'psk_mode' ? t('dynamic_form.snell.psk_mode.' + option) : option))))))),
   });
   const generate = (name) => {
     const bytes = crypto.getRandomValues(new Uint8Array(24));
@@ -360,6 +358,7 @@ function XboardSnellForm({ form, t }) {
   const shadowTLS = Boolean(form.watch('shadow_tls.enabled'));
 
   return h(H.Fragment, null,
+    select('psk_mode', ['user', 'shared_userkey', 'shared'], 'user'),
     h('div', { className: 'flex gap-2' },
       select('version', ['5', '6'], 5, Number),
       form.watch('version') == 6
@@ -377,20 +376,23 @@ function XboardSnellForm({ form, t }) {
         value: field.value || 443,
         onChange: (event) => field.onChange(Number(event.target.value) || 443),
       })) : null),
-    shadowTLS && form.watch('psk_mode') === 'user' ? h($y, {
+    shadowTLS && pskMode !== 'shared' ? h($y, {
       control: form.control,
       name: 'shadow_tls.password',
       render: ({ field }) => h(Gy, null,
         label('dynamic_form.snell.shadow_tls.password.label'),
         h(Yy, null, h('div', { className: 'flex gap-2' },
-          h(u8e, { className: 'font-mono text-xs', ...field, type: 'text', autoComplete: 'new-password', value: field.value || '' }),
+          h(u8e, {
+            className: 'font-mono text-xs', ...field, type: 'text', autoComplete: 'new-password', value: field.value || '',
+            placeholder: sharedUserkey ? t('dynamic_form.snell.shadow_tls.password.optional') : undefined,
+          }),
           h(xtt, {
             type: 'button', variant: 'outline', size: 'icon', className: 'h-9 w-9 shrink-0',
             title: t('dynamic_form.snell.shadow_tls.password.generate'), 'aria-label': t('dynamic_form.snell.shadow_tls.password.generate'),
             onClick: () => generate('shadow_tls.password'),
           }, h(YXt, { icon: 'lucide:rotate-cw', className: 'h-4 w-4' }))))),
     }) : null,
-    form.watch('psk_mode') === 'user' ? null : h($y, {
+    pskMode === 'user' ? null : h($y, {
       control: form.control,
       name: 'psk',
       render: ({ field }) => h(Gy, null,

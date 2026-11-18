@@ -108,7 +108,7 @@ class ServerSave extends FormRequest
             'padding_scheme' => 'nullable|array',
         ],
         'snell' => [
-            'psk_mode' => 'nullable|string|in:shared,user',
+            'psk_mode' => 'nullable|string|in:shared,user,shared_userkey',
             'version' => 'required|integer|in:5,6',
             'psk' => 'required|string',
             'obfs_mode' => 'nullable|string|in:none,http',
@@ -156,7 +156,9 @@ class ServerSave extends FormRequest
     private function getProtocolRules(string $type): array
     {
         $rules = self::PROTOCOL_RULES[$type] ?? [];
-        $snellUserPsk = $this->input('protocol_settings.psk_mode') === 'user';
+        $snellPskMode = $this->input('protocol_settings.psk_mode');
+        $snellUserPsk = $snellPskMode === 'user';
+        $snellSharedUserkey = $snellPskMode === 'shared_userkey';
 
         return match ($type) {
             'vmess' => array_merge(
@@ -200,10 +202,8 @@ class ServerSave extends FormRequest
                 $this->buildTlsObjectRules(includeRoot: true),
             ),
             'snell' => array_merge($rules, [
-                // Only independent PSKs behind ShadowTLS use this password. The form hides the
-                // field otherwise, so a value left in it is not checked against its length.
-                'shadow_tls.password' => $snellUserPsk && $this->boolean('protocol_settings.shadow_tls.enabled')
-                    ? ['required', 'string', 'min:12', 'max:255']
+                'shadow_tls.password' => $this->boolean('protocol_settings.shadow_tls.enabled') && ($snellUserPsk || $snellSharedUserkey)
+                    ? [$snellUserPsk ? 'required' : 'nullable', 'string', 'min:12', 'max:255']
                     : ['nullable', 'string'],
                 // This value is both the handshake target and the client's SNI.
                 // Accept ASCII DNS hostnames (IDNs must use Punycode), not URLs or IP literals.

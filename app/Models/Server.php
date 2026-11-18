@@ -325,8 +325,6 @@ class Server extends Model
             ...self::MULTIPLEX_CONFIGURATION,
         ],
         // Server versions as sing-box names them: 5 (obfs_mode) or 6 (mode).
-        // Legacy mode retains shared-PSK authentication. Independent mode uses
-        // each UUID as the Snell PSK and an optional shared ShadowTLS password.
         self::TYPE_SNELL => [
             'psk_mode' => ['type' => 'string', 'default' => 'shared'],
             'version' => ['type' => 'integer', 'default' => 5],

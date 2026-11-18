@@ -223,6 +223,96 @@ class SnellShadowTlsTest extends TestCase
         $this->assertSame('shared', $legacy->protocol_settings['psk_mode']);
     }
 
+    public function test_shared_psk_requires_a_userkey_with_optional_shadow_tls_password(): void
+    {
+        $node = $this->behindShadowTls(6);
+        $node['protocol_settings']['psk_mode'] = 'shared_userkey';
+        $this->assertTrue($this->passes($node));
+        $this->assertSame(self::UUID, $this->mihomoProxies([$node], 'clash.meta/alpha-3c0d10a')['snell']['obfs-opts']['password']);
+        $node['protocol_settings']['shadow_tls']['password'] = 'short';
+        $this->assertFalse($this->passes($node));
+        $node['protocol_settings']['shadow_tls']['password'] = 'shared-shadowtls-node-password';
+        $this->assertTrue($this->passes($node));
+        $disabled = $node;
+        $disabled['protocol_settings']['shadow_tls']['enabled'] = false;
+        $this->assertTrue($this->passes($disabled));
+        $plain = $this->mihomoProxies([$disabled], 'clash.meta/alpha-2be2f08')['snell'];
+        $this->assertSame(self::UUID, $plain['userkey']);
+        $this->assertArrayNotHasKey('obfs-opts', $plain);
+        $this->assertArrayNotHasKey('shadow_tls_password', ServerService::buildNodeConfig(new Server($disabled)));
+        $missingPsk = $node;
+        unset($missingPsk['protocol_settings']['psk']);
+        $this->assertFalse($this->passes($missingPsk));
+
+        $config = ServerService::buildNodeConfig(new Server($node));
+        $this->assertSame('shared_userkey', $config['psk_mode']);
+        $this->assertSame(self::PSK, $config['server_key']);
+        $this->assertSame('shared-shadowtls-node-password', $config['shadow_tls_password']);
+
+        $this->assertSame([], $this->mihomoProxies([$node], 'clash.meta/1.19.34'));
+        $proxy = $this->mihomoProxies([$node], 'clash.meta/alpha-2be2f08')['snell'];
+        $this->assertSame(self::PSK, $proxy['psk']);
+        $this->assertSame(self::UUID, $proxy['userkey']);
+        $this->assertSame('shared-shadowtls-node-password', $proxy['obfs-opts']['password']);
+        $node['protocol_settings']['version'] = 5;
+        $this->assertSame([], $this->mihomoProxies([$node], 'clash.meta/alpha-3c0d10a'));
+
+        $node['protocol_settings']['psk_mode'] = 'user';
+        $proxy = $this->mihomoProxies([$node], 'clash.meta/alpha-3c0d10a')['snell'];
+        $this->assertSame(self::UUID, $proxy['psk']);
+        $this->assertArrayNotHasKey('userkey', $proxy);
+        $this->assertSame('shared-shadowtls-node-password', $proxy['obfs-opts']['password']);
+    }
+
+    public function test_sing_box_chains_shared_shadow_tls_in_both_psk_modes(): void
+    {
+        $template = ['route' => ['rules' => []], 'outbounds' => [
+            ['type' => 'selector', 'tag' => 'proxy', 'outbounds' => ['direct']],
+            ['type' => 'direct', 'tag' => 'direct'],
+            ['type' => 'direct', 'tag' => 'user · ShadowTLS'],
+        ]];
+        SubscribeTemplate::setContent('singbox', json_encode($template));
+        $user = ['uuid' => self::UUID, 'u' => 0, 'd' => 0, 'transfer_enable' => 0, 'expired_at' => null];
+        $nodes = [];
+        foreach (['shared_userkey' => 5, 'user' => 6] as $mode => $version) {
+            $node = $this->behindShadowTls($version, $mode);
+            $node['protocol_settings']['psk_mode'] = $mode;
+            $node['protocol_settings']['obfs_mode'] = 'http';
+            $node['protocol_settings']['shadow_tls']['password'] = 'shared-shadowtls-node-password';
+            $nodes[] = $node;
+        }
+        $perUserShadow = $nodes[0];
+        $perUserShadow['name'] = 'per-user-shadowtls';
+        unset($perUserShadow['protocol_settings']['shadow_tls']['password']);
+        $nodes[] = $perUserShadow;
+        try {
+            $modern = new SingBox($user, $nodes, 'sing-box', '1.14.0');
+            $outbounds = array_column(json_decode($modern->handle()->getContent(), true, 512, JSON_THROW_ON_ERROR)['outbounds'], null, 'tag');
+            $this->assertSame(['direct', 'shared_userkey', 'user', 'per-user-shadowtls'], $outbounds['proxy']['outbounds']);
+            $this->assertSame('direct', $outbounds['user · ShadowTLS']['type']);
+            $this->assertSame(self::PSK, $outbounds['shared_userkey']['psk']);
+            $this->assertSame(self::UUID, $outbounds['shared_userkey']['userkey']);
+            $this->assertSame(4, $outbounds['shared_userkey']['version']);
+            $this->assertArrayNotHasKey('obfs_mode', $outbounds['shared_userkey']);
+            $this->assertSame(self::UUID, $outbounds['user']['psk']);
+            $this->assertArrayNotHasKey('userkey', $outbounds['user']);
+            $this->assertSame(self::UUID, $outbounds['per-user-shadowtls']['userkey']);
+            $this->assertSame(self::UUID, $outbounds[$outbounds['per-user-shadowtls']['detour']]['password']);
+            foreach (['shared_userkey', 'user'] as $mode) {
+                $gateway = $outbounds[$outbounds[$mode]['detour']];
+                $this->assertSame('shadowtls', $gateway['type']);
+                $this->assertSame(3, $gateway['version']);
+                $this->assertSame('node.example.com', $gateway['server']);
+                $this->assertSame('shared-shadowtls-node-password', $gateway['password']);
+                $this->assertSame(['enabled' => true, 'server_name' => 'www.example.com'], $gateway['tls']);
+            }
+            $old = new SingBox($user, $nodes, 'sing-box', '1.13.0');
+            $this->assertSame($template['outbounds'], json_decode($old->handle()->getContent(), true, 512, JSON_THROW_ON_ERROR)['outbounds']);
+        } finally {
+            SubscribeTemplate::flushCache('singbox');
+        }
+    }
+
     public function test_sing_box_snell_gate_prefers_the_actual_core_user_agent(): void
     {
         $user = ['uuid' => self::UUID, 'u' => 0, 'd' => 0, 'transfer_enable' => 0, 'expired_at' => null];
