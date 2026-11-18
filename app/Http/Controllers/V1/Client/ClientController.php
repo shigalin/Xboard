@@ -153,9 +153,12 @@ class ClientController extends Controller
         $clientName = null;
         $clientVersion = null;
 
-        if (preg_match('/([a-zA-Z0-9\-_]+)[\/\s]+(v?[0-9]+(?:\.[0-9]+){0,2})/', $flag, $matches)) {
+        if (preg_match('/([a-z0-9\-_]+)[\/\s]+v?(\d+(?:\.\d+){0,2})(-[a-z0-9]+(?:[.-][a-z0-9]+)*)?/', $flag, $matches)) {
             $potentialName = strtolower($matches[1]);
-            $clientVersion = preg_replace('/^v/', '', $matches[2]);
+            $clientVersion = $matches[2];
+            if ($potentialName === 'sing-box') {
+                $clientVersion .= $matches[3] ?? '';
+            }
 
             if (in_array($potentialName, app('protocols.flags'))) {
                 $clientName = $potentialName;
@@ -186,7 +189,7 @@ class ClientController extends Controller
 
         return [
             'flag' => $flag,
-            'name' => $clientName,
+            'name' => $clientName === 'mihomo' ? 'meta' : $clientName,
             'version' => $clientVersion
         ];
     }

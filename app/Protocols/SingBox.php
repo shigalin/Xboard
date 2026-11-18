@@ -3,6 +3,7 @@ namespace App\Protocols;
 
 use App\Utils\Helper;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\File;
 use App\Support\AbstractProtocol;
 use App\Models\Server;
 use Log;
@@ -25,6 +26,7 @@ class SingBox extends AbstractProtocol
     private $config;
     const CUSTOM_TEMPLATE_FILE = 'resources/rules/custom.sing-box.json';
     const DEFAULT_TEMPLATE_FILE = 'resources/rules/default.sing-box.json';
+    private const MIN_SNELL_CORE_VERSION = '1.14.4';
 
     /**
      * 多客户端协议支持配置
@@ -130,7 +132,15 @@ class SingBox extends AbstractProtocol
     {
         $jsonData = subscribe_template('singbox');
 
-        return is_array($jsonData) ? $jsonData : json_decode($jsonData, true);
+        $template = is_array($jsonData) ? $jsonData : json_decode($jsonData, true);
+        // Existing installations store a copy of the shipped template in the database.
+        // Select its modern equivalent per request, preserving administrator templates.
+        if ($this->supportsCore('1.12.0')
+            && $template === File::json(base_path(self::DEFAULT_TEMPLATE_FILE), JSON_THROW_ON_ERROR)) {
+            return File::json(resource_path('rules/default.sing-box.1.12.json'), JSON_THROW_ON_ERROR);
+        }
+
+        return $template;
     }
 
     protected function buildOutbounds()
@@ -138,7 +148,7 @@ class SingBox extends AbstractProtocol
         $outbounds = $this->config['outbounds'];
         $proxies = [];
         $shadowTlsOutbounds = [];
-        $supportsSnell = $this->supportsCore('1.14.0');
+        $supportsSnell = $this->supportsCore(self::MIN_SNELL_CORE_VERSION);
         $usedTags = array_fill_keys(array_merge(array_column($outbounds, 'tag'), array_column($this->servers, 'name')), true);
         foreach ($this->servers as $item) {
             $protocol_settings = $item['protocol_settings'];
@@ -340,6 +350,9 @@ class SingBox extends AbstractProtocol
         if (empty($coreVersion)) {
             return;
         }
+        // Template compatibility uses the base version. Feature gates below
+        // compare the full release, including its prerelease suffix.
+        $coreVersion = explode('-', $coreVersion, 2)[0];
 
         // >= 1.13.0: 移除已删除的 block/dns 出站
         if (version_compare($coreVersion, '1.13.0', '>=')) {
@@ -370,8 +383,8 @@ class SingBox extends AbstractProtocol
     {
         // 优先从 UA 提取核心版本
         if (!empty($this->userAgent)) {
-            if (preg_match('/sing-box[\s\/]+v?(\d+(?:\.\d+){0,2})/i', $this->userAgent, $matches)) {
-                return $matches[1];
+            if (preg_match('/sing-box[\s\/]+v?(\d+(?:\.\d+){0,2}(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?)/i', $this->userAgent, $matches)) {
+                return strtolower($matches[1]);
             }
         }
 
@@ -752,7 +765,7 @@ class SingBox extends AbstractProtocol
 
     protected function supportsHysteriaGeckoObfs(): bool
     {
-        return $this->supportsCore('1.14.0');
+        return $this->supportsCore('1.14.0-alpha.26');
     }
 
     /**
@@ -768,7 +781,7 @@ class SingBox extends AbstractProtocol
 
     protected function supportsSnellShadowTls(array $server): bool
     {
-        return $this->supportsCore('1.14.0')
+        return $this->supportsCore(self::MIN_SNELL_CORE_VERSION)
             && in_array(data_get($server, 'protocol_settings.psk_mode'), ['user', 'shared_userkey'], true);
     }
 

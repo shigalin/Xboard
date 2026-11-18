@@ -123,7 +123,7 @@ class SnellShadowTlsTest extends TestCase
     public function test_sing_box_keeps_user_key_nodes_and_drops_shadow_tls_nodes(): void
     {
         $servers = [$this->behindShadowTls(5, 'shadow-tls'), $this->snell(5, null, 'userkey')];
-        $protocol = new SingBox(['uuid' => self::UUID], $servers, 'sing-box', '1.14.0');
+        $protocol = new SingBox(['uuid' => self::UUID], $servers, 'sing-box', '1.14.4');
         $kept = (new ReflectionProperty(SingBox::class, 'servers'))->getValue($protocol);
         $this->assertSame(['userkey'], array_column($kept, 'name'));
     }
@@ -134,6 +134,8 @@ class SnellShadowTlsTest extends TestCase
         $servers = [$this->behindShadowTls(5, 'v5'), $this->behindShadowTls(6, 'v6')];
         foreach ([
             ['clash.meta/1.19.34', [], ['v5', 'v6']],
+            ['mihomo/alpha-2be2f08', [], ['v5', 'v6']],
+            ['mihomo/v1.19.28', [], ['v5']],
             ['clash.meta/1.19.34', ['flag' => 'meta'], ['v5', 'v6']],
             ['clash.meta/1.19.28', ['flag' => 'meta'], ['v5']],
             // A format override cannot claim support absent from the actual core.
@@ -210,7 +212,7 @@ class SnellShadowTlsTest extends TestCase
                     $this->assertSame('shared-shadowtls-node-password', $proxy['obfs-opts']['password']);
                     $this->assertSame('shared-shadowtls-node-password', ServerService::buildNodeConfig(new Server($node))['shadow_tls_password']);
                 } else {
-                    $sb = new SingBox(['uuid' => self::UUID], [$node], 'sing-box', '1.14.0');
+                    $sb = new SingBox(['uuid' => self::UUID], [$node], 'sing-box', '1.14.4');
                     $outbound = (new \ReflectionMethod(SingBox::class, 'buildSnell'))->invoke($sb, self::UUID, $node);
                     $this->assertSame($expected, $outbound['psk']);
                     $this->assertArrayNotHasKey('userkey', $outbound);
@@ -286,7 +288,7 @@ class SnellShadowTlsTest extends TestCase
         unset($perUserShadow['protocol_settings']['shadow_tls']['password']);
         $nodes[] = $perUserShadow;
         try {
-            $modern = new SingBox($user, $nodes, 'sing-box', '1.14.0');
+            $modern = new SingBox($user, $nodes, 'sing-box', '1.14.4');
             $outbounds = array_column(json_decode($modern->handle()->getContent(), true, 512, JSON_THROW_ON_ERROR)['outbounds'], null, 'tag');
             $this->assertSame(['direct', 'shared_userkey', 'user', 'per-user-shadowtls'], $outbounds['proxy']['outbounds']);
             $this->assertSame('direct', $outbounds['user · ShadowTLS']['type']);
@@ -313,32 +315,69 @@ class SnellShadowTlsTest extends TestCase
         }
     }
 
+    public function test_seeded_sing_box_template_matches_the_reported_core(): void
+    {
+        $user = ['uuid' => self::UUID, 'u' => 0, 'd' => 0, 'transfer_enable' => 0, 'expired_at' => null];
+        foreach (['1.10.0' => false, '1.12.0' => true, '1.13.0' => true, '1.14.0-alpha.38' => true] as $version => $modern) {
+            $request = Request::create('/api/v1/client/subscribe', 'GET', [], [], [], ['HTTP_USER_AGENT' => "sing-box/$version"]);
+            $response = app(ClientController::class)->doSubscribe($request, $user, [$this->snell(6, null)]);
+            $config = json_decode($response->getContent(), true, 512, JSON_THROW_ON_ERROR);
+
+            if ($modern) {
+                $this->assertSame('local', $config['route']['default_domain_resolver']);
+                $this->assertSame(['https', 'https'], array_column($config['dns']['servers'], 'type'));
+                $this->assertContains('sniff', array_column($config['route']['rules'], 'action'));
+                $this->assertContains('hijack-dns', array_column($config['route']['rules'], 'action'));
+                $this->assertSame([], array_column($config['inbounds'], 'sniff'));
+            } else {
+                $this->assertArrayHasKey('address', $config['dns']['servers'][0]);
+                $this->assertTrue($config['inbounds'][0]['sniff']);
+            }
+        }
+    }
+
     public function test_sing_box_snell_gate_prefers_the_actual_core_user_agent(): void
     {
         $user = ['uuid' => self::UUID, 'u' => 0, 'd' => 0, 'transfer_enable' => 0, 'expired_at' => null];
         $node = $this->snell(6, null);
         $node['protocol_settings']['psk_mode'] = 'user';
-        // Gecko obfs is gated by the same core version as Snell.
+        $wrapped = $this->behindShadowTls(6, 'wrapped');
+        $wrapped['protocol_settings']['psk_mode'] = 'user';
+        $wrapped['protocol_settings']['shadow_tls']['password'] = 'shared-shadowtls-node-password';
         $gecko = ['type' => 'hysteria', 'name' => 'gecko', 'host' => 'node.example.com', 'port' => 443, 'server_port' => 443, 'rate' => 1,
             'protocol_settings' => ['version' => 2, 'obfs' => ['open' => true, 'type' => 'gecko', 'password' => 'obfs-secret'], 'tls' => ['server_name' => 'node.example.com']]];
         foreach ([
-            ['sing-box 1.12.0', 'sing-box/1.14.0', false],
-            ['sing-box 1.14.0', 'sing-box/1.12.0', true],
-            ['sing-box 1.14.0', 'sing-box', true],
-            ['sing-box/1.14.0', 'sing-box', true],
-            ['SFM (sing-box v1.14.0)', 'sing-box', true],
-            ['', 'sing-box', false],
-            ['', 'sing-box/1.14.0', true],
-        ] as [$ua, $flag, $expected]) {
+            ['sing-box 1.12.0', 'sing-box/1.14.4', false, false],
+            ['sing-box/1.14.0-alpha.25', 'sing-box/1.14.4', false, false],
+            ['sing-box/1.14.0-alpha.26', 'sing-box', false, true],
+            ['sing-box/1.14.0-alpha.38', 'sing-box/1.14.4', false, true],
+            ['SFM (sing-box v1.14.0-alpha.38+build)', 'sing-box', false, true],
+            ['sing-box/1.14.3', 'sing-box', false, true],
+            ['sing-box/1.14.4-rc.1', 'sing-box', false, true],
+            ['sing-box 1.14.4', 'sing-box/1.12.0', true, true],
+            ['sing-box/1.14.4', 'sing-box', true, true],
+            ['SFM (sing-box v1.14.5)', 'sing-box', true, true],
+            ['', 'sing-box', false, false],
+            ['', 'sing-box/1.14.0-alpha.38', false, true],
+            ['', 'sing-box/1.14.4-rc.1', false, true],
+            ['', 'sing-box/1.14.4', true, true],
+        ] as [$ua, $flag, $supportsSnell, $supportsGecko]) {
             $request = Request::create('/api/v1/client/subscribe', 'GET', ['flag' => $flag], [], [], ['HTTP_USER_AGENT' => $ua]);
-            $response = app(ClientController::class)->doSubscribe($request, $user, [$node, $gecko]);
+            $response = app(ClientController::class)->doSubscribe($request, $user, [$node, $wrapped, $gecko]);
             $config = json_decode($response->getContent(), true, 512, JSON_THROW_ON_ERROR);
             $snell = array_values(array_filter($config['outbounds'], fn($out) => $out['type'] === 'snell'));
-            $this->assertCount($expected ? 1 : 0, $snell, $ua . ' / ' . $flag);
-            if ($expected) { $this->assertSame(self::UUID, $snell[0]['psk']); }
+            $shadowTls = array_values(array_filter($config['outbounds'], fn($out) => $out['type'] === 'shadowtls'));
+            $this->assertCount($supportsSnell ? 2 : 0, $snell, $ua . ' / ' . $flag);
+            $this->assertCount($supportsSnell ? 1 : 0, $shadowTls, $ua . ' / ' . $flag);
+            if ($supportsSnell) {
+                $this->assertSame(self::UUID, $snell[0]['psk']);
+                $this->assertSame($shadowTls[0]['tag'], $snell[1]['detour']);
+            }
             $hysteria = array_values(array_filter($config['outbounds'], fn($out) => $out['type'] === 'hysteria2'));
-            $this->assertCount($expected ? 1 : 0, $hysteria, 'gecko: ' . $ua . ' / ' . $flag);
-            if ($expected) { $this->assertSame('gecko', $hysteria[0]['obfs']['type']); }
+            $this->assertCount($supportsGecko ? 1 : 0, $hysteria, 'gecko: ' . $ua . ' / ' . $flag);
+            if ($supportsGecko) {
+                $this->assertSame('gecko', $hysteria[0]['obfs']['type']);
+            }
         }
     }
 

@@ -96,7 +96,7 @@ class SnellGeckoTest extends TestCase
         $this->assertArrayNotHasKey('obfs', $v6);
     }
 
-    public function test_only_sing_box_1_14_receives_snell_and_gecko_nodes(): void
+    public function test_sing_box_filters_snell_and_gecko_by_their_respective_core_versions(): void
     {
         $servers = [
             $this->hysteria('gecko', 'gecko'),
@@ -105,7 +105,10 @@ class SnellGeckoTest extends TestCase
             ['name' => 'snell6'] + $this->snell(6),
         ];
 
-        $current = $this->singBoxOutbounds($servers, 'sing-box', '1.14.0');
+        $alpha = $this->singBoxOutbounds($servers, 'sing-box', '1.14.0-alpha.38');
+        $this->assertSame(['gecko', 'salamander'], array_keys($alpha));
+
+        $current = $this->singBoxOutbounds($servers, 'sing-box', '1.14.4');
         $this->assertSame(['gecko', 'salamander', 'snell5', 'snell6'], array_keys($current));
         $this->assertSame('gecko', $current['gecko']['obfs']['type']);
         $this->assertSame(

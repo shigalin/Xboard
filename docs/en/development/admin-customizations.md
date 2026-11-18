@@ -240,16 +240,25 @@ version strings cannot establish core capabilities and are filtered.
 Clash Meta subscriptions include `shared_userkey` for v6 on a core that
 supports Snell userkeys. The panel recognizes mihomo 1.19.35+ and the Alpha
 builds `d569d9e`, `3c0d10a`, and `2be2f08` that contain mihomo PR #3460.
-Sing-box subscriptions support `user` and `shared_userkey` with shared
-ShadowTLS passwords from core 1.14. The ShadowTLS outbound is used as the
-Snell outbound's detour.
+Sing-box subscriptions require core `1.14.4` or later for plain Snell and
+Snell over ShadowTLS. Local tests with xboard-node found that
+`1.14.0-alpha.38` truncated UDP datagrams over Snell v6 + ShadowTLS, while
+`1.14.4` passed with both `user` and `shared_userkey`. For either mode with
+ShadowTLS enabled, the subscription uses a ShadowTLS outbound as the Snell
+outbound's detour.
+
+Requests with a `mihomo/...` core User-Agent select Clash Meta automatically.
+For sing-box 1.12.0 and later, the panel serves a modern version of the
+shipped default template when the stored template matches the original.
+Older clients continue to use the legacy default. Administrators who have
+customized their stored template manage its DNS and routing syntax separately.
 
 Upgrade xboard-node before selecting `shared_userkey`. Existing clients must
 refresh their subscriptions when changing modes or the shared ShadowTLS
 password. Rotating a user's UUID rotates their individual credential and
 revokes their old connections.
 
-Hysteria2 nodes with gecko obfs enabled are likewise sent only to sing-box
-1.14.0 or later and left out of every other subscription format. Gecko uses
+Hysteria2 nodes with gecko obfs enabled are sent to sing-box from core
+`1.14.0-alpha.26` and left out of every other subscription format. Gecko uses
 sing-box's default packet sizes on both sides. Both features need an
 xboard-node build whose sing-box includes them.
