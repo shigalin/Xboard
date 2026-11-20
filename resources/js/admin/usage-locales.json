@@ -45,7 +45,8 @@
       "node": "节点",
       "upload": "实际上传",
       "download": "实际下载",
-      "deleted": "已删除"
+      "deleted": "已删除",
+      "usedNodes": "（{{count}} 个节点）"
     },
     "copyExpiry": "复制到期时间：{{value}}",
     "onlineUsers": {
@@ -104,6 +105,10 @@
           "user": "用户 UUID 作为独立 PSK"
         }
       }
+    },
+    "todayTraffic": {
+      "title": "今日流量",
+      "tooltip": "节点今日实际上传与下载合计（不含倍率）"
     }
   },
   "en-US": {
@@ -152,7 +157,8 @@
       "node": "Node",
       "upload": "Raw upload",
       "download": "Raw download",
-      "deleted": "Deleted"
+      "deleted": "Deleted",
+      "usedNodes": "(nodes: {{count}})"
     },
     "copyExpiry": "Copy expiry time: {{value}}",
     "onlineUsers": {
@@ -211,6 +217,10 @@
           "user": "User UUID as independent PSK"
         }
       }
+    },
+    "todayTraffic": {
+      "title": "Today's Traffic",
+      "tooltip": "Raw upload + download on this node today (excluding rate)"
     }
   },
   "ru-RU": {
@@ -259,7 +269,8 @@
       "node": "Узел",
       "upload": "Отправлено",
       "download": "Получено",
-      "deleted": "Удалён"
+      "deleted": "Удалён",
+      "usedNodes": "(узлы: {{count}})"
     },
     "copyExpiry": "Копировать срок действия: {{value}}",
     "onlineUsers": {
@@ -318,6 +329,10 @@
           "user": "UUID пользователя как отдельный PSK"
         }
       }
+    },
+    "todayTraffic": {
+      "title": "Трафик сегодня",
+      "tooltip": "Фактическая загрузка и выгрузка узла за сегодня (без коэффициента)"
     }
   }
 }

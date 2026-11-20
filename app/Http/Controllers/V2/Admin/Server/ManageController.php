@@ -7,9 +7,11 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\ServerSave;
 use App\Models\Server;
 use App\Models\ServerGroup;
+use App\Models\StatServer;
 use App\Models\User;
 use App\Services\DeviceStateService;
 use App\Services\ServerService;
+use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -18,12 +20,71 @@ class ManageController extends Controller
 {
     public function getNodes(Request $request)
     {
-        $servers = ServerService::getAllServers()->map(function ($item) {
-            $item['groups'] = ServerGroup::whereIn('id', $item['group_ids'] ?? [])->get(['name', 'id']);
-            $item['parent'] = $item->parent;
-            return $item;
+        // The nodes, their groups (plain IDs in one query, legacy values one
+        // by one), parents and today's traffic share one snapshot, so a node
+        // never shows one group's old name next to another's new one.
+        $servers = Helper::readSnapshot(function () {
+            // Today's raw upload + download from the daily node stats, which
+            // StatServerJob writes on the same queue as the node's total counters.
+            $todayTraffic = StatServer::where('record_type', 'd')
+                ->where('record_at', strtotime(date('Y-m-d')))
+                ->groupBy('server_id')
+                ->selectRaw('server_id, SUM(u + d) as total')
+                ->pluck('total', 'server_id');
+            $groupCache = [];
+            $servers = ServerService::getAllServers();
+            Server::primeGroupValueCache($servers, $groupCache);
+            return $servers->map(function ($item) use ($todayTraffic, &$groupCache) {
+                [$item['group_ids'], $item['groups']] = self::listedGroups($item, $groupCache);
+                // The embedded parent's group_ids get the same conversion, so a
+                // legacy value (such as "013", or INF, which JSON cannot encode)
+                // never reaches the response raw.
+                $parent = $item->parent;
+                if ($parent !== null) {
+                    [$parent['group_ids']] = self::listedGroups($parent, $groupCache);
+                }
+                $item['parent'] = $parent;
+                $item['today_traffic'] = (int) ($todayTraffic[$item->id] ?? 0);
+                return $item;
+            });
         });
         return $this->success($servers);
+    }
+
+    /**
+     * The groups full sync gives a node, as matched by the database. Returns
+     * group_ids as the unique string list the admin form and group filter
+     * expect (matched groups by their ID, and values with no group row as
+     * they are, since users can still be in such a group) and the groups full
+     * sync serves (name and ID, ordered by ID), read with the matches. A value the database cannot compare with an
+     * integer makes full sync fail on that database, so the node then serves
+     * no group, though group_ids still lists every value for the form. A
+     * malformed legacy row cannot fail the list or break filtering. The list
+     * describes the stored value rather than reproduce it ("01" is listed as
+     * group "1"), so the admin form sends group_ids only when the admin
+     * changed them, and save() writes whatever is sent.
+     *
+     * @return array{0: list<string>, 1: list<array{name: string, id: int}>}
+     */
+    private static function listedGroups(Server $server, array &$cache): array
+    {
+        $matches = $server->groupValueMatches($cache);
+        // Group 0 is a valid ID; only null means no group row.
+        $existing = array_values(array_unique(array_filter(array_column($matches, 'group'), fn ($id) => $id !== null)));
+        $unmatched = array_map(fn ($match) => (string) $match['value'],
+            array_filter($matches, fn ($match) => $match['group'] === null));
+        $groupIds = array_values(array_unique(array_filter(
+            [...array_map('strval', $existing), ...$unmatched], fn ($id) => $id !== '')));
+        $served = [];
+        if (!in_array(false, array_column($matches, 'comparable'), true)) {
+            foreach ($matches as $match) {
+                if ($match['group'] !== null) {
+                    $served[$match['group']] = ['name' => $match['name'], 'id' => $match['group']];
+                }
+            }
+            ksort($served);
+        }
+        return [$groupIds, array_values($served)];
     }
 
     public function getOnlineUsers(Request $request, DeviceStateService $devices)

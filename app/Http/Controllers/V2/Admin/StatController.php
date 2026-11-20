@@ -6,11 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Models\CommissionLog;
 use App\Models\Order;
 use App\Models\Server;
+use App\Models\ServerGroup;
 use App\Models\Stat;
 use App\Models\StatServer;
 use App\Models\StatUser;
 use App\Models\Ticket;
 use App\Models\User;
+use App\Utils\Helper;
 use App\Services\StatisticalService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -489,6 +491,39 @@ class StatController extends Controller
     }
 
     /**
+     * The keys of $values (stored group values keyed by their JSON) that
+     * match at least one user's group_id. One statement compares up to
+     * Server::GROUP_VALUE_COLUMNS values with the IN full sync runs, in a
+     * single pass over the user table. Call it inside Helper::readSnapshot()
+     * so all chunks read the same snapshot. If the database rejects a
+     * value, every value counts as matched, which keeps the nodes in the
+     * ranking.
+     *
+     * @param array<string, mixed> $values
+     * @return list<string>
+     */
+    private static function groupValuesWithUsers(array $values): array
+    {
+        $populated = [];
+        // One column per value, in chunks that stay under every database's
+        // result column limit.
+        foreach (array_chunk($values, Server::GROUP_VALUE_COLUMNS, true) as $chunk) {
+            $keys = array_keys($chunk);
+            $columns = array_map(fn ($index) => "MAX(CASE WHEN group_id IN (?) THEN 1 ELSE 0 END) AS v{$index}",
+                array_keys($keys));
+            $row = Server::compareGroupValues(fn () => User::toBase()
+                ->selectRaw(implode(', ', $columns), array_values($chunk))
+                ->first(), false);
+            foreach ($keys as $index => $key) {
+                if ($row === false || (int) ($row->{"v{$index}"} ?? 0) === 1) {
+                    $populated[] = $key;
+                }
+            }
+        }
+        return $populated;
+    }
+
+    /**
      * Get traffic ranking data for nodes or users
      * 
      * @param Request $request
@@ -509,14 +544,78 @@ class StatController extends Controller
         $previousEndDate = $startDate;
 
         if ($type === 'node') {
-            // Get node traffic data
-            $currentData = StatServer::selectRaw('server_id as id, SUM(u + d) as value')
-                ->where('record_at', '>=', $startDate)
-                ->where('record_at', '<=', $endDate)
-                ->groupBy('server_id')
-                ->orderBy('value', 'DESC')
-                ->limit(10)
-                ->get();
+            // The admin group names, the traffic totals and the group and user
+            // reads, chunks included, share one snapshot: a group renamed or a
+            // user changing group between two reads is seen one way only.
+            [$ranked, $adminOnly] = Helper::readSnapshot(function () use ($startDate, $endDate) {
+                // Nodes whose permission groups are all named "admin" are
+                // admin-only. Match the name in PHP: accent-insensitive MySQL
+                // collations would also match names such as "Ádmin" in SQL.
+                $adminGroupIds = ServerGroup::get(['id', 'name'])
+                    ->filter(fn ($group) => strtolower($group->name) === 'admin')
+                    ->map(fn ($group) => (int) $group->id)
+                    ->all();
+                // Get node traffic data. With admin groups, rank every node
+                // with traffic in the period and leave out the admin-only ones.
+                $ranked = StatServer::selectRaw('server_id as id, SUM(u + d) as value')
+                    ->where('record_at', '>=', $startDate)
+                    ->where('record_at', '<=', $endDate)
+                    ->groupBy('server_id')
+                    ->orderBy('value', 'DESC')
+                    ->when($adminGroupIds === [], fn ($query) => $query->limit(10))
+                    ->get();
+                if ($adminGroupIds === []) {
+                    return [$ranked, []];
+                }
+
+                // A node is admin-only when the groups full sync serves it are
+                // all admin groups, and there is at least one. Values are
+                // compared by the database exactly as full sync compares them.
+                // A value with no group row serves the users still in that
+                // group (a plan's group_id need not have a row), so it disqualifies the
+                // node only if such users exist. A value the database cannot
+                // compare makes full sync fail, so the node serves no one and
+                // stays in the ranking; it affects only its own node. Deleted
+                // nodes cannot be classified and stay too.
+                $adminOnly = [];
+                $servers = Server::whereIntegerInRaw('id', $ranked->pluck('id')->all())
+                    ->get(['id', 'group_ids'])->keyBy('id');
+                $groupCache = [];
+                Server::primeGroupValueCache($servers, $groupCache);
+                $candidates = [];
+                $rowless = [];
+                foreach ($ranked as $data) {
+                    $server = $servers->get($data->id);
+                    if ($server === null) {
+                        continue;
+                    }
+                    $servesAdmins = false;
+                    $values = [];
+                    foreach ($server->groupValueMatches($groupCache) as $match) {
+                        if (!$match['comparable']
+                            || ($match['group'] !== null && !in_array($match['group'], $adminGroupIds, true))) {
+                            continue 2;
+                        }
+                        if ($match['group'] !== null) {
+                            $servesAdmins = true;
+                        } else {
+                            $values[Server::groupValueKey($match['value'])] = $match['value'];
+                        }
+                    }
+                    if ($servesAdmins) {
+                        $candidates[$data->id] = array_keys($values);
+                        $rowless += $values;
+                    }
+                }
+                $populated = self::groupValuesWithUsers($rowless);
+                foreach ($candidates as $id => $keys) {
+                    if (array_intersect($keys, $populated) === []) {
+                        $adminOnly[$id] = true;
+                    }
+                }
+                return [$ranked, $adminOnly];
+            });
+            $currentData = $ranked->reject(fn ($data) => isset($adminOnly[$data->id]))->take(10)->values();
 
             // Get previous period data for comparison
             $previousData = StatServer::selectRaw('server_id as id, SUM(u + d) as value')
@@ -530,6 +629,7 @@ class StatController extends Controller
         } else {
             // Get user traffic data
             $currentData = StatUser::selectRaw('user_id as id, SUM(u + d) as value')
+                ->whereNotIn('user_id', User::where('is_admin', true)->select('id'))
                 ->where('record_at', '>=', $startDate)
                 ->where('record_at', '<=', $endDate)
                 ->groupBy('user_id')

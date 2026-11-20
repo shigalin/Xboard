@@ -6,12 +6,16 @@ use App\Jobs\TrafficFetchJob;
 use App\Models\Server;
 use App\Models\User;
 use App\Services\DeviceBanService;
+use App\Services\ServerService;
 use App\Utils\Helper;
+use Illuminate\Cache\Events\RetrievingKey;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
 use Tests\TestCase;
 
@@ -237,6 +241,200 @@ class DeviceBanTest extends TestCase
             ->assertOk()->json("device_bans.{$user->id}"));
     }
 
+    public function test_legacy_group_ids_keep_full_sync_semantics_and_match_subscriptions_where_sync_crashed(): void
+    {
+        $user = $this->makeUser();
+        $nodes = [];
+        foreach ([
+            // The shape the admin form writes.
+            'list' => json_encode(['1']),
+            // Full sync used to crash on scalars; it now agrees with subscriptions.
+            'scalar' => json_encode('1'),
+            'intScalar' => json_encode(1),
+            // Full sync failed on these too, and subscriptions do not match
+            // them on every database, so they serve no group.
+            'zeroPadded' => json_encode('01'),
+            'multiNested' => json_encode([['1', '2']]),
+            // Shapes full sync already served at HEAD keep that behaviour.
+            'object' => json_encode(['first' => '1']),
+            'junk' => json_encode([true, ['1']]),
+            // The database matches these to group 1, as full sync's whereIn does.
+            'paddedList' => json_encode(['01']),
+            'boolean' => json_encode([true]),
+            // SQLite full sync served nobody; MySQL failed and now recovers "1".
+            'emptyNested' => json_encode(['1', [[]]]),
+        ] as $name => $groupIds) {
+            $nodes[$name] = $this->makeServer(1);
+            Server::whereKey($nodes[$name]->id)->toBase()->update(['group_ids' => $groupIds]);
+        }
+        Server::query()->toBase()->update(['show' => true]);
+        $served = ['list', 'scalar', 'object', 'junk', 'paddedList', 'boolean'];
+        if (DB::connection()->getDriverName() !== 'sqlite') {
+            $served[] = 'emptyNested';
+        }
+
+        $users = fn (Server $node) => array_column($this->getJson('/api/v1/server/UniProxy/user?'
+            . http_build_query($this->auth($node) + ['node_type' => 'vmess']))->assertOk()->json('users'), 'id');
+        foreach ($nodes as $name => $node) {
+            $this->assertSame(in_array($name, $served, true) ? [$user->id] : [], $users($node), $name);
+        }
+        // Subscriptions (whereJsonContains) agree on the shapes whose result
+        // does not depend on the database.
+        $subscribed = array_column(ServerService::getAvailableServers($user->fresh()), 'id');
+        foreach (['list' => true, 'scalar' => true, 'intScalar' => false, 'zeroPadded' => false] as $name => $expected) {
+            $this->assertSame($expected, in_array($nodes[$name]->id, $subscribed, true), $name);
+        }
+
+        foreach ($nodes as $node) {
+            Cache::put("node_ws_alive:{$node->id}", true);
+        }
+        $pushes = [];
+        Redis::enableEvents();
+        Redis::listen(function (CommandExecuted $command) use (&$pushes): void {
+            if ($command->command === 'publish') {
+                $pushes[] = json_decode($command->parameters[1], true, flags: JSON_THROW_ON_ERROR);
+            }
+        });
+        $deadline = (int) floor(microtime(true) * 1000) + 179000;
+        $this->postJson('/api/v2/server/device-bans', $this->auth($nodes['list']) + [
+            'device_bans' => [$user->id => $deadline],
+        ])->assertOk()->assertJsonPath("device_bans.{$user->id}", $deadline);
+        // Bans reach exactly the nodes full sync gives the user to.
+        $this->assertEqualsCanonicalizing(
+            array_map(fn ($name) => $nodes[$name]->id, $served),
+            array_column($pushes, 'node_id')
+        );
+    }
+
+    /**
+     * PostgreSQL rejects "abc" for the integer group_id (SQLSTATE 22P02) and
+     * full sync fails for such a node there. Simulate that rejection: the
+     * node gets no ban and every other node still does.
+     */
+    public function test_ban_pushes_match_users_in_one_statement_and_check_only_affected_nodes(): void
+    {
+        $user = $this->makeUser();
+        $nodes = [];
+        foreach (range(1, 24) as $group) {
+            $nodes[$group] = $this->makeServer($group);
+            Cache::put("node_ws_alive:{$nodes[$group]->id}", true);
+        }
+        $userQueries = 0;
+        DB::listen(function ($query) use (&$userQueries) {
+            // Group matching for the push; the reporting node's own user
+            // checks (which select uuid) are part of the report itself.
+            if (preg_match('/from ["`]v2_user["`]/', $query->sql) && str_contains($query->sql, 'group_id')
+                && !str_contains($query->sql, 'uuid')) {
+                $userQueries++;
+            }
+        });
+        $onlineReads = 0;
+        Event::listen(RetrievingKey::class, function (RetrievingKey $event) use (&$onlineReads) {
+            if (str_starts_with($event->key, 'node_ws_alive:')) {
+                $onlineReads++;
+            }
+        });
+        $pushes = [];
+        Redis::enableEvents();
+        Redis::listen(function (CommandExecuted $command) use (&$pushes): void {
+            if ($command->command === 'publish') {
+                $pushes[] = json_decode($command->parameters[1], true, flags: JSON_THROW_ON_ERROR);
+            }
+        });
+
+        $deadline = (int) floor(microtime(true) * 1000) + 179000;
+        $this->postJson('/api/v2/server/device-bans', $this->auth($nodes[1]) + [
+            'device_bans' => [$user->id => $deadline],
+        ])->assertOk()->assertJsonPath("device_bans.{$user->id}", $deadline);
+        $this->assertSame([$nodes[1]->id], array_column($pushes, 'node_id'));
+        $this->assertSame(1, $userQueries);
+        $this->assertSame(1, $onlineReads);
+    }
+
+    public function test_ban_pushes_compare_more_group_values_than_a_statement_has_columns(): void
+    {
+        $user = $this->makeUser();
+        User::whereKey($user->id)->toBase()->update(['group_id' => 4100]);
+        // 4,200 distinct values: more result columns than SQLite (2000) or
+        // PostgreSQL (1664) allow in one statement.
+        $node = $this->makeServer(1);
+        Server::whereKey($node->id)->toBase()->update(['group_ids' => json_encode(array_map('strval', range(1, 4200)))]);
+        Cache::put("node_ws_alive:{$node->id}", true);
+        $pushes = [];
+        Redis::enableEvents();
+        Redis::listen(function (CommandExecuted $command) use (&$pushes): void {
+            if ($command->command === 'publish') {
+                $pushes[] = json_decode($command->parameters[1], true, flags: JSON_THROW_ON_ERROR);
+            }
+        });
+
+        $deadline = (int) floor(microtime(true) * 1000) + 179000;
+        $this->postJson('/api/v2/server/device-bans', $this->auth($node) + [
+            'device_bans' => [$user->id => $deadline],
+        ])->assertOk()->assertJsonPath("device_bans.{$user->id}", $deadline);
+        $this->assertSame([$node->id], array_column($pushes, 'node_id'));
+    }
+
+    public function test_a_float_overflow_and_group_zero_keep_their_own_ban_matches(): void
+    {
+        if (in_array(DB::getDriverName(), ['mysql', 'mariadb'], true)) {
+            $this->markTestSkipped('MySQL JSON columns reject 1e400.');
+        }
+        $user = $this->makeUser();
+        User::whereKey($user->id)->toBase()->update(['group_id' => 0]);
+        $nodes = ['zero' => $this->makeServer(0), 'overflow' => $this->makeServer(0)];
+        Server::whereKey($nodes['zero']->id)->toBase()->update(['group_ids' => '[0]']);
+        Server::whereKey($nodes['overflow']->id)->toBase()->update(['group_ids' => '[1e400]']);
+        foreach ($nodes as $node) {
+            Cache::put("node_ws_alive:{$node->id}", true);
+        }
+        $pushes = [];
+        Redis::enableEvents();
+        Redis::listen(function (CommandExecuted $command) use (&$pushes): void {
+            if ($command->command === 'publish') {
+                $pushes[] = json_decode($command->parameters[1], true, flags: JSON_THROW_ON_ERROR);
+            }
+        });
+
+        $deadline = (int) floor(microtime(true) * 1000) + 179000;
+        $this->postJson('/api/v2/server/device-bans', $this->auth($nodes['zero']) + [
+            'device_bans' => [$user->id => $deadline],
+        ])->assertOk()->assertJsonPath("device_bans.{$user->id}", $deadline);
+        // INF matches no user the way full sync compares it.
+        $this->assertSame([$nodes['zero']->id], array_column($pushes, 'node_id'));
+    }
+
+    public function test_a_group_value_the_database_rejects_skips_only_its_node(): void
+    {
+        $user = $this->makeUser();
+        $nodes = ['list' => $this->makeServer(1), 'rejected' => $this->makeServer(1)];
+        Server::whereKey($nodes['rejected']->id)->toBase()->update(['group_ids' => json_encode(['1', 'abc'])]);
+        foreach ($nodes as $node) {
+            Cache::put("node_ws_alive:{$node->id}", true);
+        }
+        DB::beforeExecuting(function (string $sql, array $bindings, $connection) {
+            if (in_array('abc', $bindings, true) && str_contains($sql, 'group_id')) {
+                throw new QueryException($connection->getName(), $sql, $bindings,
+                    new class ('invalid input syntax for type integer: "abc"') extends \PDOException {
+                        protected $code = '22P02';
+                    });
+            }
+        });
+        $pushes = [];
+        Redis::enableEvents();
+        Redis::listen(function (CommandExecuted $command) use (&$pushes): void {
+            if ($command->command === 'publish') {
+                $pushes[] = json_decode($command->parameters[1], true, flags: JSON_THROW_ON_ERROR);
+            }
+        });
+
+        $deadline = (int) floor(microtime(true) * 1000) + 179000;
+        $this->postJson('/api/v2/server/device-bans', $this->auth($nodes['list']) + [
+            'device_bans' => [$user->id => $deadline],
+        ])->assertOk()->assertJsonPath("device_bans.{$user->id}", $deadline);
+        $this->assertSame([$nodes['list']->id], array_column($pushes, 'node_id'));
+    }
+
     private function auth(Server $node): array
     {
         return ['token' => 'test-node-token', 'node_id' => $node->id];
@@ -248,7 +446,7 @@ class DeviceBanTest extends TestCase
             'email' => 'device-ban@example.com',
             'password' => '',
             'uuid' => Helper::guid(true),
-            'token' => Helper::guid(true),
+            'token' => Helper::guid(),
             'group_id' => 1,
             'transfer_enable' => 1024,
             'expired_at' => null,

@@ -52,7 +52,7 @@ class UsageOverviewTest extends TestCase
             'email' => Helper::guid() . '@example.com',
             'password' => '',
             'uuid' => Helper::guid(true),
-            'token' => Helper::guid(true),
+            'token' => Helper::guid(),
             'is_admin' => $admin,
         ]));
     }

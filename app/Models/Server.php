@@ -3,8 +3,10 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
@@ -453,6 +455,208 @@ class Server extends Model
     public function groups()
     {
         return ServerGroup::whereIn('id', $this->group_ids ?? [])->get();
+    }
+
+    /**
+     * The group IDs whose users this node serves. Full sync, device bans and
+     * the admin views share this so they agree with each other.
+     *
+     * Full sync has always passed the stored array to whereIn. Whenever the
+     * query builder accepted it (each top-level element binds exactly one
+     * value), this returns those bound values unchanged, so every row that
+     * synced before syncs the same users. A nested empty list such as
+     * ["1",[[]]] passes whereIn's check but binds fewer values than it has
+     * elements; SQLite ran that query with the remaining bindings shifted and
+     * the last condition (banned = ?) unbound, so it served nobody but still
+     * passed the empty result to the server.users.get hook. Such a row
+     * returns [null], which binds one value that matches no user, so the
+     * query and the hook still run. Rows that made full sync fail (any scalar, nesting that
+     * changes the element count, and on other databases any binding count
+     * mismatch) recover only the groups subscriptions match on every
+     * database: top-level JSON strings of a stored list that are exactly a
+     * group ID. Everything else in them, and any stored JSON object (MySQL
+     * subscriptions never match one), is no group.
+     *
+     * Subscriptions and incremental sync use whereJsonContains in SQL, which
+     * already differed from full sync for integer lists, booleans and objects.
+     */
+    public function syncGroupIds(): array
+    {
+        /** @var mixed $ids Legacy rows decode to scalars, not only arrays. */
+        $ids = $this->group_ids;
+        // Full sync skipped empty() values without a query or the user hook:
+        // null, [], "", 0, false and the string "0" served nobody.
+        if (empty($ids)) {
+            return [];
+        }
+        if (!is_array($ids)) {
+            return $this->isExactGroupId($ids) ? [$ids] : [];
+        }
+        $values = array_values($ids);
+        $bound = Arr::flatten($values);
+        $accepted = count(Arr::flatten($values, 1)) === count($values);
+        if ($accepted && count($bound) === count($values)) {
+            return $bound;
+        }
+        if ($accepted && count($bound) < count($values) && $this->getConnection()->getDriverName() === 'sqlite') {
+            return [null];
+        }
+        // The cast decodes JSON objects and lists alike; tell them apart.
+        $raw = $this->getAttributes()['group_ids'] ?? null;
+        if (!is_string($raw) || !is_array(json_decode($raw))) {
+            return [];
+        }
+        return array_values(array_filter($values, fn ($id) => $this->isExactGroupId($id)));
+    }
+
+    /**
+     * A JSON string that subscriptions' whereJsonContains matches against
+     * (string) $groupId for some group_id the user column can hold: its
+     * canonical decimal form, including "0" and negative IDs, which the
+     * signed v2_user.group_id can hold (on MySQL v2_plan.group_id is
+     * unsigned). v2_user.group_id is a 32-bit integer on MySQL and PostgreSQL
+     * (PostgreSQL rejects a larger value and fails the whole query) and
+     * 64-bit on SQLite; a value outside that range matches no user.
+     */
+    private function isExactGroupId(mixed $id): bool
+    {
+        if (!is_string($id) || (string) (int) $id !== $id) {
+            return false;
+        }
+        return $this->getConnection()->getDriverName() === 'sqlite'
+            || ((int) $id >= -2147483648 && (int) $id <= 2147483647);
+    }
+
+    /**
+     * The existing group each value of syncGroupIds() matches, compared by the
+     * database with the same whereIn full sync runs, so values such as "01",
+     * " 1" or true match exactly as they do there. Null never matches any row
+     * and is left out. A value the database cannot compare with an integer
+     * (PostgreSQL rejects "abc"; full sync fails on it there too) matches no
+     * group and has comparable false. Pass the same $cache for every server
+     * to query each distinct value once, and prime it with
+     * primeGroupValueCache() to read many servers' groups in one query.
+     *
+     * The matched group's name comes with it, so callers need no second read.
+     *
+     * @return list<array{value: mixed, group: ?int, name: ?string, comparable: bool}>
+     */
+    public function groupValueMatches(array &$cache): array
+    {
+        $values = $this->syncGroupIds();
+        self::fillGroupValueCache($values, $cache);
+        $matches = [];
+        foreach ($values as $value) {
+            if ($value === null) {
+                continue;
+            }
+            $entry = $cache[self::groupValueKey($value)];
+            $matches[] = [
+                'value' => $value,
+                'group' => is_array($entry) ? $entry['id'] : null,
+                'name' => is_array($entry) ? $entry['name'] : null,
+                'comparable' => $entry !== false,
+            ];
+        }
+        return $matches;
+    }
+
+    /**
+     * The array key for one stored group value, distinct for every value and
+     * type: "1", 1, 1.0 and true differ, and so do INF and -INF from a JSON
+     * number too large for a float. (json_encode() returns false for those,
+     * and false as an array key becomes 0, the key of the integer 0.)
+     */
+    public static function groupValueKey(mixed $value): string
+    {
+        return serialize($value);
+    }
+
+    /**
+     * Fill the groupValueMatches() cache for all these servers at once.
+     *
+     * @param iterable<Server> $servers
+     */
+    public static function primeGroupValueCache(iterable $servers, array &$cache): void
+    {
+        $values = [];
+        foreach ($servers as $server) {
+            array_push($values, ...$server->syncGroupIds());
+        }
+        self::fillGroupValueCache($values, $cache);
+    }
+
+    /**
+     * Cache the group each value matches: ['id', 'name'], null for no group
+     * row, or false when the database rejects the value. An integer, or a
+     * string that is exactly an integer's decimal form, within the 32-bit
+     * range every database's integer column holds, compares as that integer
+     * on every database: no type conversion is left to the database, so one
+     * query matches all of them without a savepoint. Every other value
+     * ("01", " 1", true, out-of-range IDs) is compared on its own by the
+     * database, as full sync's whereIn compares it.
+     */
+    private static function fillGroupValueCache(array $values, array &$cache): void
+    {
+        $canonical = [];
+        $legacy = [];
+        foreach ($values as $value) {
+            if ($value === null) {
+                continue;
+            }
+            $key = self::groupValueKey($value);
+            if (array_key_exists($key, $cache) || isset($canonical[$key]) || array_key_exists($key, $legacy)) {
+                continue;
+            }
+            $id = is_int($value) ? $value : (is_string($value) && (string) (int) $value === $value ? (int) $value : null);
+            if ($id !== null && $id >= -2147483648 && $id <= 2147483647) {
+                $canonical[$key] = $id;
+            } else {
+                $legacy[$key] = $value;
+            }
+        }
+        if ($canonical !== []) {
+            $groups = ServerGroup::toBase()->whereIntegerInRaw('id', array_values(array_unique($canonical)))
+                ->get(['id', 'name'])->keyBy(fn ($group) => (int) $group->id);
+            foreach ($canonical as $key => $id) {
+                $group = $groups->get($id);
+                $cache[$key] = $group === null ? null : ['id' => $id, 'name' => $group->name];
+            }
+        }
+        foreach ($legacy as $key => $value) {
+            $group = self::compareGroupValues(
+                fn () => ServerGroup::whereIn('id', [$value])->toBase()->first(['id', 'name']), false);
+            $cache[$key] = $group === false ? false
+                : ($group === null ? null : ['id' => (int) $group->id, 'name' => $group->name]);
+        }
+    }
+
+    /**
+     * The most stored group values one statement compares, one result column
+     * each. SQLite (2000 by default) and PostgreSQL (1664) cap the columns a
+     * statement returns, so callers compare more values in chunks of this size.
+     */
+    public const GROUP_VALUE_COLUMNS = 500;
+
+    /**
+     * Run a query that compares stored group values with an integer column
+     * the way full sync does. If the database rejects a value for that column
+     * (a data exception, SQLSTATE class 22, such as PostgreSQL's invalid
+     * integer input), only this query fails and $onError is returned. Inside
+     * a transaction the query runs in a savepoint, so the failure does not
+     * abort the transaction. Other errors are rethrown.
+     */
+    public static function compareGroupValues(callable $query, mixed $onError): mixed
+    {
+        $connection = (new self())->getConnection();
+        try {
+            return $connection->transactionLevel() > 0 ? $connection->transaction($query) : $query();
+        } catch (QueryException $error) {
+            if (!str_starts_with((string) $error->getCode(), '22')) {
+                throw $error;
+            }
+            return $onError;
+        }
     }
 
     public function routes()

@@ -127,7 +127,21 @@ try {
         '{id:"traffic",accessorFn:e=>(e.u||0)+(e.d||0),header:({column:e})=>Q.jsx(eQt,{column:e,title:t("columns.traffic.title"),tooltip:t("columns.traffic.tooltip")})');
     $bundle = replaceAdminFragment($bundle,
         '},size:120,enableSorting:!1,enableHiding:!0},{id:"actions"',
-        '},size:120,enableSorting:!0,enableHiding:!0},{id:"actions"');
+        '},size:120,enableSorting:!0,enableHiding:!0},'
+        // Today's raw node traffic from the daily stats, next to the cycle total.
+        . '{accessorKey:"today_traffic",header:({column:e})=>Q.jsx(eQt,{column:e,title:t("columns.todayTraffic.title"),tooltip:t("columns.todayTraffic.tooltip")}),'
+        . 'cell:({row:e})=>Q.jsx("span",{className:"whitespace-nowrap text-xs tabular-nums text-muted-foreground",children:RS(e.original.today_traffic||0)}),'
+        . 'size:100,enableSorting:!0,enableHiding:!0},{id:"actions"');
+
+    // The node list describes legacy group values rather than reproduce them
+    // ("01" is listed as group "1"). Send group_ids only when the selection
+    // the admin sees differs from the one the dialog opened with (g holds the
+    // group options), so saving other fields, or removing and re-adding a
+    // group, keeps the stored value; save() writes whatever is sent.
+    $bundle = replaceAdminFragment($bundle,
+        '{transfer_enable_gb:r,...s}=t;(await qL({...s,type:l,transfer_enable:i}))',
+        '{transfer_enable_gb:r,...s}=t;o?.id&&s.id===o.id&&XboardSameGroupSelection(s.group_ids,o.group_ids,g)&&delete s.group_ids;'
+        . '(await qL({...s,type:l,transfer_enable:i}))');
 
     // Key node rows by node ID so selections and per-row state follow the node
     // when the 30s list refresh changes the order.
@@ -163,6 +177,7 @@ try {
         . "  resources.user.nodeTraffic = additions.nodeTraffic;\n"
         . "  resources.user.copyExpiry = additions.copyExpiry;\n"
         . "  resources.server.onlineUsers = additions.onlineUsers;\n"
+        . "  resources.server.columns.todayTraffic = additions.todayTraffic;\n"
         . "  resources.server.dynamic_form.hysteria.obfs.type.gecko = additions.nodeForm.gecko;\n"
         . "  resources.server.dynamic_form.snell = additions.nodeForm.snell;\n}\n";
     $components = file_get_contents($root . '/resources/js/admin/usage-components.js');

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Server;
 use App\Models\User;
+use App\Utils\Helper;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 
@@ -131,6 +132,40 @@ class DeviceBanService
         }
     }
 
+    /**
+     * The banned user IDs each stored group value matches, keyed like
+     * $values, compared as full sync's whereIn compares them. One statement
+     * covers up to Server::GROUP_VALUE_COLUMNS values. If the database rejects a value (PostgreSQL rejects
+     * "abc" for an integer), each value is compared on its own instead and a
+     * rejected one maps to null.
+     *
+     * @param list<int> $userIds
+     * @param array<string, mixed> $values
+     * @return array<string, list<int>|null>
+     */
+    private static function bannedUsersByGroupValue(array $userIds, array $values): array
+    {
+        $matched = [];
+        // One column per value, in chunks that stay under every database's
+        // result column limit.
+        foreach (array_chunk($values, Server::GROUP_VALUE_COLUMNS, true) as $chunk) {
+            $keys = array_keys($chunk);
+            $columns = array_map(fn ($index) => "CASE WHEN group_id IN (?) THEN 1 ELSE 0 END AS v{$index}", array_keys($keys));
+            $rows = Server::compareGroupValues(fn () => User::query()->toBase()
+                ->whereIntegerInRaw('id', $userIds)
+                ->select('id')
+                ->selectRaw(implode(', ', $columns), array_values($chunk))
+                ->get(), null);
+            foreach ($keys as $index => $key) {
+                $matched[$key] = $rows === null
+                    ? Server::compareGroupValues(fn () => User::query()->whereIntegerInRaw('id', $userIds)
+                        ->whereIn('group_id', [$chunk[$key]])->pluck('id')->all(), null)
+                    : $rows->filter(fn ($row) => (int) $row->{"v{$index}"} === 1)->pluck('id')->all();
+            }
+        }
+        return $matched;
+    }
+
     private function publishNewBans(array $reports): void
     {
         $newBans = [];
@@ -146,18 +181,39 @@ class DeviceBanService
             return;
         }
 
-        $users = User::query()->whereIntegerInRaw('id', array_keys($newBans))->pluck('group_id', 'id');
-        $groups = [];
-        foreach ($users as $id => $groupId) {
-            $groups[$groupId][$id] = $newBans[$id];
-        }
-        foreach (Server::all(['id', 'group_ids']) as $server) {
-            $bans = [];
-            foreach ($server->group_ids ?? [] as $groupId) {
-                $bans += $groups[$groupId] ?? [];
+        // Collect each node's stored group values, then match every newly
+        // banned user against every distinct value in one statement with the
+        // IN full sync runs, so values such as "01" or true reach the users
+        // full sync gives the node. Only nodes that get bans are checked for
+        // being online.
+        // The node and user reads, chunks included, share one snapshot, so a
+        // user changing group between two reads is matched in exactly one.
+        $bannedIds = array_keys($newBans);
+        [$nodeValues, $matched] = Helper::readSnapshot(function () use ($bannedIds) {
+            $nodeValues = [];
+            $values = [];
+            foreach (Server::all(['id', 'group_ids']) as $server) {
+                foreach ($server->syncGroupIds() as $value) {
+                    if ($value !== null) {
+                        $key = Server::groupValueKey($value);
+                        $values[$key] = $value;
+                        $nodeValues[$server->id][$key] = true;
+                    }
+                }
             }
-            if ($bans !== [] && NodeSyncService::isNodeOnline($server->id)) {
-                NodeSyncService::push($server->id, 'sync.devices', ['device_bans' => (object) $bans]);
+            return [$nodeValues, self::bannedUsersByGroupValue($bannedIds, $values)];
+        });
+        foreach ($nodeValues as $nodeId => $keys) {
+            $bans = [];
+            foreach (array_keys($keys) as $key) {
+                if ($matched[$key] === null) {
+                    // The database rejects this value; full sync fails for the node.
+                    continue 2;
+                }
+                $bans += array_intersect_key($newBans, array_flip($matched[$key]));
+            }
+            if ($bans !== [] && NodeSyncService::isNodeOnline($nodeId)) {
+                NodeSyncService::push($nodeId, 'sync.devices', ['device_bans' => (object) $bans]);
             }
         }
     }

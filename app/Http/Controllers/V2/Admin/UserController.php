@@ -221,10 +221,27 @@ class UserController extends Controller
 
         $this->applyFiltersAndSorts($request, $userModel);
 
-        $users = $userModel->orderBy('id', 'desc')
-            ->paginate($pageSize, ['*'], 'page', $current);
+        // Count, in a separate query, the nodes with recorded traffic in the
+        // current cycle: the rows the node traffic dialog lists, deleted nodes
+        // included. Keeping it out of the plugin-adjustable user query means
+        // a plugin that rebuilds the select, aliases the table or defines its
+        // own usage fields is unaffected. Both reads run in one snapshot, so a
+        // concurrent reset or report cannot pair the page's usage (which the
+        // filters and sort selected) with a count from another cycle.
+        [$users, $usedNodeCounts] = Helper::readSnapshot(function () use ($userModel, $pageSize, $current) {
+            $users = $userModel->orderBy('id', 'desc')
+                ->paginate($pageSize, ['*'], 'page', $current);
+            // Inline integer IDs: pageSize has no upper bound, and bound
+            // parameters do.
+            $usedNodeCounts = UserServerTraffic::whereIntegerInRaw('user_id', $users->getCollection()->pluck('id')->all())
+                ->groupBy('user_id')
+                ->selectRaw('user_id, COUNT(*) as total')
+                ->pluck('total', 'user_id');
+            return [$users, $usedNodeCounts];
+        });
 
-        $users->getCollection()->transform(function ($user): array {
+        $users->getCollection()->transform(function ($user) use ($usedNodeCounts): array {
+            $user->setAttribute('used_node_count', (int) ($usedNodeCounts[$user->id] ?? 0));
             return self::transformUserData($user);
         });
 

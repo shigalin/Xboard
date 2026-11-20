@@ -5,9 +5,39 @@ namespace App\Utils;
 use App\Services\Plugin\HookManager;
 use App\Models\User;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
 
 class Helper
 {
+    /**
+     * Run reads in one transaction at REPEATABLE READ, so every statement
+     * sees the same snapshot even where the connection defaults to READ
+     * COMMITTED (as PostgreSQL does, and MySQL can be configured to). MySQL
+     * and MariaDB take the level for the next transaction before it begins,
+     * PostgreSQL as the transaction's first statement. A SQLite transaction
+     * already reads one snapshot. Inside an outer transaction the level can
+     * no longer be set: the reads join it and get its isolation level, so a
+     * caller that opened a READ COMMITTED transaction can still see values
+     * from different moments.
+     */
+    public static function readSnapshot(callable $read): mixed
+    {
+        $connection = DB::connection();
+        if ($connection->transactionLevel() > 0) {
+            return $read();
+        }
+        $driver = $connection->getDriverName();
+        if (in_array($driver, ['mysql', 'mariadb'], true)) {
+            $connection->statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        }
+        return $connection->transaction(function () use ($connection, $driver, $read) {
+            if ($driver === 'pgsql') {
+                $connection->statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            }
+            return $read();
+        });
+    }
+
     public static function uuidToBase64($uuid, $length)
     {
         return base64_encode(substr($uuid, 0, $length));

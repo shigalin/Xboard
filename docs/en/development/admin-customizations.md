@@ -120,6 +120,141 @@ Deploy the migration before restarting queue workers on the new code, then run
 the admin customization script (the existing update/build scripts do this).
 Old workers do not record node detail, so their traffic remains unattributed.
 
+The used-traffic cell also shows how many nodes the user has used, from
+`used_node_count` in the `user/fetch` response. It counts the user's rows in
+`v2_user_server_traffic`, the same nodes the dialog lists, including deleted
+nodes. Traffic from before attribution was enabled is not counted. The count
+is a separate query, outside the `admin.user.fetch.query` plugin hook, so
+usage fields a plugin defines are returned as it selected them. The page and
+the count are read in one transaction at REPEATABLE READ (set for that
+transaction on MySQL, MariaDB and PostgreSQL, whose default may be READ
+COMMITTED; a SQLite transaction already reads one snapshot), so a concurrent
+reset or report cannot pair the page's usage, which the filters and sort
+selected, with a count from another cycle. This holds because the `user/fetch`
+route opens no transaction of its own: inside a caller's transaction the level
+can no longer be set and the reads use that transaction's level, so under READ
+COMMITTED they can again disagree.
+
+## Today's node traffic
+
+`server/manage/getNodes` returns `today_traffic` for each node: raw upload plus
+download from today's daily row in `v2_stat_server`, without the node rate and
+summed across protocol types. The node list shows it in a sortable column after
+the cycle traffic. It is updated by the same `stat` queue job as the node's
+total counters, so it lags reports by the queue delay.
+
+The same response describes each node's groups as full sync serves them. The
+database matches each value from `Server::syncGroupIds()` against group rows
+with the same `whereIn` full sync runs (`Server::groupValueMatches()`), so values
+such as `"01"` or `true` show the group full sync gives them, and `null` shows
+none. Each distinct value is compared once per request, and the matched
+group's name is read with it. Plain IDs (integers, or strings that are exactly
+an integer's decimal form, within the 32-bit range) compare the same on every
+database, so one query matches them for all nodes; every other value is
+compared on its own, as full sync compares it. These reads, the nodes, their
+parents and today's traffic share one REPEATABLE READ transaction, so a node
+never lists one group's old name next to another's new one. Each distinct
+value is cached under a key that keeps its type (`"1"`, `1` and `true` differ,
+as do `INF` and `-INF` from JSON numbers too large for a float), so two values
+never share a match. The ranking and device-ban pushes key values the same way. `groups` lists the matched groups, group `0` included. `group_ids` is a unique list of strings
+for the admin form and group filter: matched groups by ID, plus values that
+match no group row as they are, because users can still be in a group without
+a row (a plan's `group_id` need not have one). The list describes the stored value
+rather than reproduce it (`["01"]` is listed as group `"1"`, and the request's
+`TrimStrings` middleware would turn a listed `" 3"` into `"3"`), so sending it
+back would rewrite the stored value. The customized node dialog therefore sends
+`group_ids` only when the selection the admin sees differs from the one it
+opened with. The selector shows, and after an edit keeps, only values that are
+group options, so the comparison is between the shown selections as sets:
+removing and re-adding a group, or reordering, sends nothing and keeps values
+the selector cannot show (such as `" 3"` with no group row). An actual change
+sends the new selection, which drops those values, as the upstream selector
+always did. `server/manage/save`
+writes whatever it receives, as before. Saving other
+fields keeps the stored value, and an explicit change is always written, even
+when the list it was compared with has gone stale. If the admin customization
+step fails and the upstream bundle is served, the dialog sends every field
+again and saving rewrites legacy values. A value the
+database cannot compare with an integer (PostgreSQL rejects `"abc"`) fails only
+its own comparison; full sync fails for such a node on that database, so
+`groups` is empty for it while `group_ids` still lists every value.
+
+Node user sync (`ServerService::getAvailableUsers`) and device-ban pushes use
+the same helper. Full sync skipped any stored value PHP's `empty()` treats as
+empty (`null`, `[]`, `""`, `0`, `false` and the string `"0"`) without a query or
+the `server.users.get` hook, and the helper still returns no group for them.
+Whenever the query builder's `whereIn` accepted the stored
+array (each top-level element binds exactly one value), the helper returns
+those bound values, so every row that synced before syncs the same users. A
+nested empty list such as `["1",[[]]]` passes `whereIn`'s check but binds fewer
+values than it has elements: SQLite ran that query with the remaining bindings
+shifted and the last condition (`banned = ?`) unbound, serving nobody, and it
+still serves nobody there (the hook still ran); MySQL and PostgreSQL failed on it. Only rows that
+made full sync fail change: any scalar, nesting that changes the element count
+such as `[["1","2"]]`, and the binding-count mismatches above outside SQLite.
+On SQLite the helper returns `[null]` for those mismatches, which binds one
+value that matches no user, so the query runs and its empty result still
+passes through the `server.users.get` plugin hook, as it did. The failed rows
+keep just the top-level JSON strings
+of a stored list that are exactly an integer's decimal form (`"1"`, `"0"` or
+`"-2"`: `v2_user.group_id` is a signed integer, though on MySQL `v2_plan.group_id`
+is unsigned; not `"01"` or `" 1"`) within
+the range `v2_user.group_id` holds (32-bit on MySQL and PostgreSQL, where
+PostgreSQL would reject a larger value and fail the query; 64-bit on SQLite),
+the
+groups subscriptions match on every database, and nothing else; a stored JSON
+object that full sync rejected serves no group, since MySQL subscriptions never
+match an object. Before, these rows
+returned 500 to the node's user sync and stopped ban pushes to every node.
+Device-ban pushes match the newly banned users against every distinct stored
+value in one statement per 500 values (`group_id IN (?)` per value, one result
+column each, which keeps under every database's column limit; restricted to
+their IDs),
+so a ban reaches exactly the online nodes whose full sync includes the user's
+group (`"01"` reaches group 1, as full sync does). Only nodes that get a ban
+are checked for being online. If the database rejects a value, values are
+compared one by one and a node with a rejected value gets no bans, since its
+full sync fails there too. The node and user reads, all chunks included, run in
+one transaction at REPEATABLE READ (as `user/fetch` does), so a user who changes
+group between two chunk reads is still matched in exactly one group.
+
+Subscriptions, incremental sync, group notifications and the traffic-exceeded
+check select nodes in SQL with `whereJsonContains`. For lists of string IDs
+(what the admin form writes) and string scalars every path agrees. They already
+disagreed with full sync before this change for integer lists, booleans and
+objects (and, depending on the database, nested values); those rows are left as
+they were. Making every path agree on them would change who can connect to
+such nodes, so it is a separate decision.
+
+Group `0` keeps two exceptions from before this change. A node storing the
+scalar `"0"` gets no users from full sync (PHP's `empty("0")` skipped it),
+while subscriptions still match it on SQLite, MySQL and PostgreSQL. A node
+storing `["0"]` serves group `0` in full sync and subscriptions, but
+incremental sync (`NodeSyncService::notifyUserChanged`) and the
+traffic-exceeded check (`CheckTrafficExceeded`) skip users whose `group_id` is
+`0`, so their changes reach the node only at the next full sync.
+
+## Traffic ranking
+
+The dashboard traffic ranking (`stat/getTrafficRank`) leaves out
+administrators (`is_admin`) from the user ranking and admin-only nodes from the
+node ranking. A node is admin-only when every group full sync serves it, as
+the database matches its values, is named `admin`, and there is at least one. A
+value with no group row counts only if users are still in that group, which
+keeps the node in the ranking. Group names are matched (ASCII case-insensitive,
+compared in PHP so MySQL's accent-insensitive collation does not also match
+names such as `Ádmin`). Deleted nodes cannot be classified and stay in the
+ranking, as does a node with a value the database cannot compare (full sync
+fails for it there, so it serves no one); such a value affects only its own
+node. Only nodes with traffic in the period are classified. Whether users
+remain in a group without a row is answered for up to 500 such values per
+statement (one result column each), reading the user table once per statement,
+and only for nodes whose matched
+groups are all admin groups. These group and user reads share one REPEATABLE
+READ transaction, so a user changing group between chunks cannot make every
+chunk miss them. The legacy `getServerLastRank` and `getServerYesterdayRank` endpoints,
+which the current admin build does not call, are unchanged.
+
 ## Online users by node
 
 Clicking a node's online-count cell opens `GET

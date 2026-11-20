@@ -211,7 +211,10 @@ function XboardNodeTraffic({ user }) {
       },
     },
     h('span', { className: 'flex justify-between gap-2 text-sm' },
-      h('span', { className: 'underline decoration-dotted underline-offset-4' }, RS(user.total_used)),
+      h('span', { className: 'whitespace-nowrap' },
+        h('span', { className: 'underline decoration-dotted underline-offset-4' }, RS(user.total_used)),
+        h('span', { className: 'ml-1 text-xs text-muted-foreground' },
+          t('nodeTraffic.usedNodes', { count: user.used_node_count || 0 }))),
       h('span', { className: 'text-xs text-muted-foreground' }, percent.toFixed(1) + '%')),
     h('span', { className: 'block h-1.5 w-full rounded-full bg-secondary' },
       h('span', { className: Im('block h-full rounded-full transition-all', percent > 90 ? 'bg-destructive' : 'bg-primary'),
@@ -226,6 +229,18 @@ function XboardNodeTraffic({ user }) {
           h(xtt, { variant: 'outline', onClick: () => setOpen(false) }, t('common:close'))))
     )
   );
+}
+
+// Whether the node dialog's group selection, as the admin sees it, is the one
+// the dialog opened with. The selector shows only values that are group
+// options and keeps only those once the admin edits it, so removing and
+// re-adding a group drops legacy values it never showed (" 3" with no group
+// row). Compare the shown selections as sets: an unchanged selection keeps
+// the stored value, including values the selector cannot show.
+function XboardSameGroupSelection(current, initial, options) {
+  const shown = new Set((options || []).map((option) => String(option.value)));
+  const visible = (values) => [...new Set((values || []).map(String).filter((value) => shown.has(value)))].sort();
+  return JSON.stringify(visible(current)) === JSON.stringify(visible(initial));
 }
 
 function XboardNodeOnlineUsersCell({ row }) {

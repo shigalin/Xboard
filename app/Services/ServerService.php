@@ -97,7 +97,7 @@ class ServerService
      */
     public static function getAvailableUsers(Server $node, ?array $userIds = null)
     {
-        $groupIds = $node->group_ids ?? [];
+        $groupIds = $node->syncGroupIds();
         if (empty($groupIds) || $userIds === []) {
             return collect();
         }
