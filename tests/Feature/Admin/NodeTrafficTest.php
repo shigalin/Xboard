@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Jobs\SendEmailJob;
 use App\Jobs\TrafficFetchJob;
 use App\Models\Server;
 use App\Models\User;
@@ -231,6 +232,90 @@ class NodeTrafficTest extends TestCase
         // the SQLite sum to a different value than the list's SQL sum.
         $this->assertSame($row['today_traffic'], $detail['total_used']);
         $this->assertSame($row['today_traffic'], $detail['attributed_total']);
+    }
+
+    public function test_today_traffic_sort_orders_filtered_users_across_pages_by_billed_usage(): void
+    {
+        $high = $this->user();
+        $idle = $this->user();
+        $low = $this->user();
+        $free = $this->user();
+        $node = $this->node();
+        $this->report($high, $node, 25, 25, 2);
+        $this->report($high, $this->node(), 25, 25);
+        $this->report($low, $node, 600, 300, 0.1);
+        $this->report($idle, $node, 500, 500, reportedAt: Date::today()->timestamp - 1);
+        $this->report($free, $node, 2000, 3000, 0);
+
+        Sanctum::actingAs($this->user(true));
+        $filter = [['id' => 'id', 'value' => [$high->id, $idle->id, $low->id, $free->id]]];
+        $descending = [[$high->id, 150], [$low->id, 90], [$free->id, 0], [$idle->id, 0]];
+        $ascending = [[$free->id, 0], [$idle->id, 0], [$low->id, 90], [$high->id, 150]];
+        foreach ([[true, $descending], [false, $ascending]] as [$desc, $expected]) {
+            foreach ([1, 2] as $page) {
+                $rows = $this->postJson($this->endpoint('fetch'), [
+                    'current' => $page, 'pageSize' => 2, 'filter' => $filter,
+                    'sort' => [['id' => 'today_traffic', 'desc' => $desc]],
+                ])->assertOk()->assertJsonPath('total', 4)->json('data');
+                $this->assertSame(array_slice($expected, ($page - 1) * 2, 2), array_map(
+                    fn ($row) => [$row['id'], $row['today_traffic']],
+                    $rows,
+                ));
+            }
+        }
+    }
+
+    public function test_filtered_csv_export_uses_the_requested_traffic_sort(): void
+    {
+        $mostToday = $this->user();
+        $mostUsed = $this->user();
+        $node = $this->node();
+        $this->report($mostToday, $node, 50, 50);
+        $this->report($mostUsed, $node, 25, 50);
+        $this->report($mostUsed, $node, 500, 500, reportedAt: Date::today()->timestamp - 1);
+        Sanctum::actingAs($this->user(true));
+
+        foreach ([
+            ['today_traffic', 'ASC'],
+            ['total_used', 'DESC'],
+        ] as [$sort, $direction]) {
+            $csv = $this->postJson($this->endpoint('dumpCSV'), [
+                'scope' => 'filtered',
+                'filter' => [['id' => 'id', 'value' => [$mostToday->id, $mostUsed->id]]],
+                'sort' => $sort, 'sort_type' => $direction,
+            ])->assertOk()->streamedContent();
+            $emails = array_map(
+                fn ($line) => str_getcsv($line, escape: '')[0],
+                array_slice(explode("\n", trim($csv)), 1),
+            );
+            $this->assertSame([$mostUsed->email, $mostToday->email], $emails);
+        }
+    }
+
+    public function test_filtered_mail_and_ban_accept_virtual_sort_fields_without_using_them(): void
+    {
+        $user = $this->user();
+        Sanctum::actingAs($this->user(true));
+        $selection = [
+            'scope' => 'filtered',
+            'filter' => [['id' => 'id', 'value' => 'eq:' . $user->id]],
+            'sort_type' => 'DESC',
+        ];
+
+        $trafficQuery = false;
+        DB::listen(function (\Illuminate\Database\Events\QueryExecuted $query) use (&$trafficQuery) {
+            if (str_contains($query->sql, 'v2_user_server_traffic')) {
+                $trafficQuery = true;
+            }
+        });
+        foreach (['today_traffic', 'total_used'] as $sort) {
+            $request = $selection + ['sort' => $sort];
+            $this->postJson($this->endpoint('sendMail'), $request + ['subject' => 'Fixture', 'content' => 'Fixture'])->assertOk();
+            $this->postJson($this->endpoint('ban'), $request)->assertOk();
+        }
+        Bus::assertDispatchedTimes(SendEmailJob::class, 2);
+        $this->assertFalse($trafficQuery);
+        $this->assertTrue($user->fresh()->banned);
     }
 
     public function test_inactive_cycle_counters_do_not_leak_into_new_usage_and_daily_metadata_has_a_fallback(): void

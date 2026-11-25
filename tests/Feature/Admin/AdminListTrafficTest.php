@@ -10,6 +10,7 @@ use App\Models\UserServerTraffic;
 use App\Services\Plugin\HookManager;
 use App\Utils\Helper;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Redis;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -156,6 +157,44 @@ class AdminListTrafficTest extends TestCase
         $users = collect($this->getJson($this->endpoint('user/fetch') . '?pageSize=50')->assertOk()->json('data'))
             ->keyBy('id');
         $this->assertSame(1, $users[$user->id]['used_node_count']);
+    }
+
+    public function test_today_traffic_sort_works_with_a_plugin_aliased_user_source(): void
+    {
+        $this->travelTo(Date::parse('2026-05-01 12:00:00'));
+        $active = $this->createUser();
+        $idle = $this->createUser();
+        Sanctum::actingAs($this->createUser(true));
+        UserServerTraffic::create([
+            'user_id' => $active->id, 'server_id' => 1, 'server_name' => 'node',
+            'daily_record_at' => Date::today()->timestamp, 'daily_billed_u' => 123,
+        ]);
+        $request = [
+            'pageSize' => 1,
+            'sort' => [['id' => 'today_traffic', 'desc' => true]],
+        ];
+        $endpoint = $this->endpoint('user/fetch');
+
+        HookManager::registerFilter('admin.user.fetch.query',
+            fn ($query) => $query->from('v2_user as listed_user')->select('listed_user.*')
+                ->whereIn('listed_user.id', [$active->id, $idle->id])
+                ->selectRaw('(listed_user.u + listed_user.d) * 2 as total_used'));
+        $this->postJson($endpoint, $request)->assertOk()
+            ->assertJsonPath('data.0.id', $active->id)->assertJsonPath('data.0.today_traffic', 123);
+
+        HookManager::registerFilter('admin.user.fetch.query',
+            fn ($query) => $query->fromSub(User::query()->toBase(), 'listed_user')->select('listed_user.*')
+                ->leftJoin('v2_plan as listed_plan', 'listed_plan.id', '=', 'listed_user.plan_id')
+                ->selectRaw('(listed_user.u + listed_user.d) as total_used'));
+        $this->postJson($endpoint, ['pageSize' => 1])->assertOk()
+            ->assertJsonPath('data.0.id', $idle->id);
+        $this->postJson($endpoint, $request)->assertOk()
+            ->assertJsonPath('data.0.id', $active->id)->assertJsonPath('data.0.today_traffic', 123);
+
+        HookManager::registerFilter('admin.user.fetch.query',
+            fn ($query) => $query->fromRaw('(select * from v2_user) listed_user'));
+        $this->postJson($endpoint, $request)->assertOk()
+            ->assertJsonPath('data.0.id', $active->id)->assertJsonPath('data.0.today_traffic', 123);
     }
 
     public function test_node_list_shows_the_groups_full_sync_serves(): void

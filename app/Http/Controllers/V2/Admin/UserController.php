@@ -17,6 +17,7 @@ use App\Services\Plugin\HookManager;
 use App\Services\UserService;
 use App\Traits\QueryOperators;
 use App\Utils\Helper;
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Http\Request;
@@ -51,10 +52,10 @@ class UserController extends Controller
     }
 
     // Apply filters and sorts to the query builder.
-    private function applyFiltersAndSorts(Request $request, Builder|QueryBuilder $builder): void
+    private function applyFiltersAndSorts(Request $request, Builder|QueryBuilder $builder, ?int $recordAt = null): void
     {
         $this->applyFilters($request, $builder);
-        $this->applySorting($request, $builder);
+        $this->applySorting($request, $builder, $recordAt);
     }
 
     // Apply filters to the query builder.
@@ -160,17 +161,46 @@ class UserController extends Controller
     }
 
     // Apply sorting rules to the query builder.
-    private function applySorting(Request $request, Builder|QueryBuilder $builder): void
+    private function applySorting(Request $request, Builder|QueryBuilder $builder, ?int $recordAt): void
     {
-        if (!$request->has('sort')) {
-            return;
+        $sorts = $request->input('sort', []);
+        // The paginated list sends an array. Filtered actions send one field
+        // with a separate direction.
+        if (is_string($sorts)) {
+            $sorts = $sorts === '' ? [] : [['id' => $sorts, 'desc' => $request->input('sort_type') !== 'ASC']];
         }
 
-        collect($request->input('sort'))->each(function ($sort) use ($builder) {
+        foreach (collect($sorts) as $sort) {
             $field = $sort['id'];
             $direction = $sort['desc'] ? 'DESC' : 'ASC';
+            if ($field === 'today_traffic') {
+                $query = $builder instanceof Builder ? $builder->getQuery() : $builder;
+                $userIdColumn = $this->trafficSortUserId($query);
+                $builder->orderBy($this->todayTrafficTotal($userIdColumn, $recordAt ??= Date::today()->timestamp), $direction);
+                continue;
+            }
             $builder->orderBy($field, $direction);
-        });
+        }
+    }
+
+    private function trafficSortUserId(QueryBuilder $query): string|Expression
+    {
+        $from = $query->from;
+        if (is_string($from)) {
+            return (preg_split('/\s+as\s+/i', $from, 2)[1] ?? $from) . '.id';
+        }
+        if ($from instanceof Expression) {
+            $grammar = $query->getGrammar();
+            $source = $from->getValue($grammar);
+            // fromSub() has already quoted and prefixed its alias. Preserve
+            // that token so the correlation resolves even when a join has id.
+            $alias = '/(?:\s+as\s+|\)\s+)(`(?:``|[^`])+`|"(?:""|[^"])+"|\[[^\]]+\]|[a-z_][\w$]*)\s*\z/i';
+            if (is_string($source) && preg_match($alias, $source, $parts)) {
+                return DB::raw($parts[1] . '.' . $grammar->wrap('id'));
+            }
+        }
+
+        return 'id';
     }
 
     // Resolve bulk operation scope and normalize user_ids.
@@ -220,11 +250,11 @@ class UserController extends Controller
 
         $userModel = HookManager::filter('admin.user.fetch.query', $userModel, $request);
 
-        $this->applyFiltersAndSorts($request, $userModel);
+        $recordAt = Date::today()->timestamp;
+        $this->applyFiltersAndSorts($request, $userModel, $recordAt);
 
         // Read node counts and today's billed bytes, including deleted nodes,
         // outside the plugin-adjustable query but in the same snapshot.
-        $recordAt = Date::today()->timestamp;
         [$users, $traffic] = Helper::readSnapshot(function () use ($userModel, $pageSize, $current, $recordAt) {
             $users = $userModel->orderBy('id', 'desc')
                 ->paginate($pageSize, ['*'], 'page', $current);
@@ -260,17 +290,26 @@ class UserController extends Controller
             );
         }
 
-        // SQLite can keep fractional billed bytes. Feed each user's SUM in
-        // node ID order, independently of how the outer GROUP BY sorts rows.
-        $orderedBytes = DB::table($table . ' as daily')
-            ->whereColumn('daily.user_id', 'traffic.user_id')
-            ->where('daily.daily_record_at', $recordAt)
-            ->orderBy('daily.server_id')
-            ->selectRaw('daily.daily_billed_u + daily.daily_billed_d as billed');
-        return $summary->selectSub(
-            DB::query()->fromSub($orderedBytes, 'ordered_bytes')->selectRaw('COALESCE(SUM(billed), 0)'),
-            'today_traffic',
-        );
+        return $summary->selectSub($this->todayTrafficTotal('traffic.user_id', $recordAt), 'today_traffic');
+    }
+
+    private function todayTrafficTotal(string|Expression $userIdColumn, int $recordAt): QueryBuilder
+    {
+        $table = (new UserServerTraffic())->getTable();
+        // Keep the inner table's own id out of the outer-column lookup.
+        $dailyBytes = DB::table($table)
+            ->where('daily_record_at', $recordAt)
+            ->select('user_id', 'server_id')
+            ->selectRaw('daily_billed_u + daily_billed_d as billed');
+        $bytes = DB::query()->fromSub($dailyBytes, 'daily')
+            ->whereColumn('daily.user_id', $userIdColumn);
+        if ($bytes->getConnection()->getDriverName() !== 'sqlite') {
+            return $bytes->selectRaw('COALESCE(SUM(daily.billed), 0)');
+        }
+
+        // Preserve the addition order of SQLite's fractional billed bytes.
+        return DB::query()->fromSub($bytes->select('daily.billed')->orderBy('daily.server_id'), 'ordered_bytes')
+            ->selectRaw('COALESCE(SUM(billed), 0)');
     }
 
     // Transform user fields for API response.
@@ -530,7 +569,6 @@ class UserController extends Controller
         // 优化查询：使用with预加载plan关系，避免N+1问题
         $query = User::query()
             ->with('plan:id,name')
-            ->orderBy('id', 'asc')
             ->select([
                 'email',
                 'balance',
@@ -546,12 +584,15 @@ class UserController extends Controller
         if ($scope === 'selected') {
             $query->whereIn('id', $userIds);
         } elseif ($scope === 'filtered') {
+            $query->selectRaw('(u + d) as total_used');
             $this->applyFiltersAndSorts($request, $query);
         } // all: ignore filter/sort
+        $sorted = !empty($query->getQuery()->orders);
+        $query->orderBy('id', $sorted ? 'desc' : 'asc');
 
         $filename = 'users_' . date('Y-m-d_His') . '.csv';
 
-        return response()->streamDownload(function () use ($query) {
+        return response()->streamDownload(function () use ($query, $sorted) {
             // 打开输出流
             $output = fopen('php://output', 'w');
 
@@ -570,8 +611,7 @@ class UserController extends Controller
                 '订阅地址'
             ]);
 
-            // 分批处理数据以减少内存使用
-            $query->chunk(500, function ($users) use ($output) {
+            $writeRows = fn () => $query->chunk(500, function ($users) use ($output) {
                 foreach ($users as $user) {
                     try {
                         $row = [
@@ -598,7 +638,16 @@ class UserController extends Controller
                 gc_collect_cycles();
             });
 
-            fclose($output);
+            try {
+                if ($sorted) {
+                    // A report can move a user across an OFFSET boundary.
+                    Helper::readSnapshot($writeRows);
+                } else {
+                    $writeRows();
+                }
+            } finally {
+                fclose($output);
+            }
         }, $filename, [
             'Content-Type' => 'text/csv; charset=UTF-8',
             'Content-Disposition' => 'attachment; filename="' . $filename . '"'
@@ -804,17 +853,12 @@ class UserController extends Controller
             }
         }
 
-        $sortType = in_array($request->input('sort_type'), ['ASC', 'DESC']) ? $request->input('sort_type') : 'DESC';
-        $sort = $request->input('sort') ? $request->input('sort') : 'created_at';
-
         $builder = User::query()
             ->with('plan:id,name')
             ->orderBy('id', 'desc');
 
         if ($scope === 'filtered') {
-            // filtered: apply filters/sort
-            $builder->orderBy($sort, $sortType);
-            $this->applyFiltersAndSorts($request, $builder);
+            $this->applyFilters($request, $builder);
         } elseif ($scope === 'selected') {
             $builder->whereIn('id', $userIds);
         } // all: ignore filter/sort
@@ -874,15 +918,11 @@ class UserController extends Controller
             }
         }
 
-        $sortType = in_array($request->input('sort_type'), ['ASC', 'DESC']) ? $request->input('sort_type') : 'DESC';
-        $sort = $request->input('sort') ? $request->input('sort') : 'created_at';
-
         $builder = User::query()->orderBy('id', 'desc');
 
         if ($scope === 'filtered') {
-            // filtered: keep current semantics
-            $builder->orderBy($sort, $sortType);
-            $this->applyFiltersAndSorts($request, $builder);
+            // Sorting does not affect which filtered users are banned.
+            $this->applyFilters($request, $builder);
         } elseif ($scope === 'selected') {
             $builder->whereIn('id', $userIds);
         } // all: ignore filter/sort

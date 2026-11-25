@@ -86,7 +86,7 @@ try {
     $bundle = substr($bundle, 0, $trafficStart)
         . 'cell:XboardUsedTrafficCell},'
         . '{accessorKey:"today_traffic",header:({column:e})=>Q.jsx(eQt,{column:e,title:r("nodeTraffic.today.column")}),'
-        . 'cell:XboardTodayTrafficCell,enableSorting:!1,enableColumnFilter:!1'
+        . 'cell:XboardTodayTrafficCell,enableSorting:!0,enableColumnFilter:!1'
         . substr($bundle, $trafficEnd);
 
     $balanceStart = strpos($bundle, '{accessorKey:"balance",header:({column:e})=>Q.jsx(eQt,{column:e,title:r("columns.balance")})');

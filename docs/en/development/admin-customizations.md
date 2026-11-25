@@ -150,6 +150,15 @@ shows actual upload and download bytes and includes deleted nodes.
 The list and dialog use the same SQL aggregate. On SQLite, it adds fractional
 billed bytes in node ID order. The dialog reads that total and its node rows
 in one statement.
+Sorting the Today's Traffic column orders all matching users by those billed
+bytes before pagination. Users with no traffic today sort as zero, and ties
+use descending user ID. The list evaluates the sort and displays the values
+from the same snapshot.
+
+Filtered CSV exports apply the selected sort before the user ID tie-breaker.
+All chunks of a sorted export read one snapshot so traffic updates cannot move
+users across chunk boundaries. Filtered mail and ban actions use the filter
+to select users.
 
 `v2_user_server_traffic` keeps separate cycle and daily counters in a
 single row per user and node. The report's dispatch timestamp sets its
