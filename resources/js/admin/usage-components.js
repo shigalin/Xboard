@@ -151,16 +151,28 @@ function XboardOnlineIPs({ user, children, className }) {
   );
 }
 
-function XboardNodeTraffic({ user }) {
+function XboardUsedTrafficCell({ row }) {
+  return H.createElement(XboardNodeTraffic, { user: row.original });
+}
+
+function XboardTodayTrafficCell({ row }) {
+  return H.createElement(XboardNodeTraffic, { user: row.original, today: true });
+}
+
+function XboardNodeTraffic({ user, today = false }) {
   const h = H.createElement;
   const { t } = jy('user');
   const mobile = p8e();
+  const todayMobile = today && mobile;
   const [open, setOpen] = H.useState(false);
   const focusTitle = H.useCallback((element) => element?.focus(), []);
+  const label = today ? 'nodeTraffic.today.' : 'nodeTraffic.';
   const { data, isFetching, isError, refetch } = pC({
-    queryKey: ['userNodeTraffic', user.id],
+    queryKey: ['userNodeTraffic', user.id, today ? 'today' : 'cycle'],
     queryFn: async () => {
-      const response = await IL(OL() + '/user/getNodeTraffic', { params: { id: user.id } });
+      const params = { id: user.id };
+      if (today) params.period = 'today';
+      const response = await IL(OL() + '/user/getNodeTraffic', { params });
       return response.data;
     },
     enabled: open,
@@ -177,14 +189,14 @@ function XboardNodeTraffic({ user }) {
     const summary = data.summary;
     content = h('div', { className: 'space-y-4' },
       h('div', { className: 'flex flex-wrap gap-4 text-sm' },
-        h('span', null, t('nodeTraffic.used', { value: RS(summary.total_used) })),
-        h('span', null, t('nodeTraffic.attributed', { value: RS(summary.attributed_total) }))),
-      summary.recorded_from ? h('p', { className: 'text-xs text-muted-foreground' },
+        h('span', null, t(label + 'used', { value: RS(summary.total_used) })),
+        !today ? h('span', null, t('nodeTraffic.attributed', { value: RS(summary.attributed_total) })) : null),
+      !today && summary.recorded_from ? h('p', { className: 'text-xs text-muted-foreground' },
         t('nodeTraffic.recordedFrom', { date: SS(summary.recorded_from) })) : null,
       summary.unattributed_total > 0 ? h('p', { className: 'rounded-md border p-3 text-sm', role: 'note' },
         t('nodeTraffic.unattributed', { value: RS(summary.unattributed_total) })) : null,
       summary.inconsistent ? h('p', { className: 'text-sm text-destructive', role: 'alert' }, t('nodeTraffic.inconsistent')) : null,
-      !data.list.length ? h('p', { className: 'py-8 text-center text-muted-foreground' }, t('nodeTraffic.empty'))
+      !data.list.length ? h('p', { className: 'py-8 text-center text-muted-foreground' }, t(label + 'empty'))
         : h('div', { style: { maxHeight: 'min(60vh, 480px)', overflow: 'auto' } },
           h('table', { className: 'w-full text-sm' },
             h('thead', null, h('tr', { className: 'border-b text-left text-muted-foreground' },
@@ -202,27 +214,28 @@ function XboardNodeTraffic({ user }) {
   return h(htt, { open, onOpenChange: setOpen },
     h(gtt, { asChild: true }, h('button', {
       type: 'button',
-      className: 'w-full space-y-1 rounded text-left hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-      title: t('nodeTraffic.title'),
-      'aria-label': t('nodeTraffic.view', { email: user.email }),
+      className: Im(todayMobile ? 'inline-block max-w-full text-right' : 'w-full text-left',
+        'space-y-1 rounded hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'),
+      title: t(label + 'title'),
+      'aria-label': t(label + 'view', { email: user.email }),
       onClick: (event) => {
         event.stopPropagation();
         event.currentTarget.blur();
       },
     },
-    h('span', { className: 'flex justify-between gap-2 text-sm' },
-      h('span', { className: 'whitespace-nowrap' },
-        h('span', { className: 'underline decoration-dotted underline-offset-4' }, RS(user.total_used)),
-        h('span', { className: 'ml-1 text-xs text-muted-foreground' },
-          t('nodeTraffic.usedNodes', { count: user.used_node_count || 0 }))),
-      h('span', { className: 'text-xs text-muted-foreground' }, percent.toFixed(1) + '%')),
-    h('span', { className: 'block h-1.5 w-full rounded-full bg-secondary' },
+    h('span', { className: todayMobile ? 'block text-sm' : 'flex justify-between gap-2 text-sm' },
+      h('span', { className: todayMobile ? 'flex flex-wrap justify-end gap-x-1' : 'whitespace-nowrap' },
+        h('span', { className: 'whitespace-nowrap underline decoration-dotted underline-offset-4' }, RS(today ? user.today_traffic || 0 : user.total_used)),
+        h('span', { className: Im('whitespace-nowrap text-xs text-muted-foreground', !todayMobile && 'ml-1') },
+          t('nodeTraffic.usedNodes', { count: (today ? user.today_node_count : user.used_node_count) || 0 }))),
+      !today ? h('span', { className: 'text-xs text-muted-foreground' }, percent.toFixed(1) + '%') : null),
+    !today ? h('span', { className: 'block h-1.5 w-full rounded-full bg-secondary' },
       h('span', { className: Im('block h-full rounded-full transition-all', percent > 90 ? 'bg-destructive' : 'bg-primary'),
-        style: { width: Math.max(0, Math.min(percent, 100)) + '%' } })))),
+        style: { width: Math.max(0, Math.min(percent, 100)) + '%' } })) : null)),
     h(ptt, { className: 'max-w-2xl', style: { maxHeight: '90vh', overflowY: 'auto' } },
       h(mtt, null,
-        h(_tt, { ref: focusTitle, tabIndex: -1, className: 'outline-none' }, t('nodeTraffic.title')),
-        h(vtt, { className: 'break-all text-sm text-muted-foreground' }, user.email + ' · ' + t('nodeTraffic.description'))),
+        h(_tt, { ref: focusTitle, tabIndex: -1, className: 'outline-none' }, t(label + 'title')),
+        h(vtt, { className: 'break-all text-sm text-muted-foreground' }, user.email + ' · ' + t(label + 'description'))),
       h('div', { className: 'space-y-4', style: { minWidth: 0, padding: mobile ? '0 16px 16px' : undefined } },
         content,
         h('div', { className: 'flex justify-end' },

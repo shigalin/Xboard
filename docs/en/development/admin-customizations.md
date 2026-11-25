@@ -100,8 +100,12 @@ report at once. On SQLite 3.35+ the counters are read through `UPDATE ...
 RETURNING`, which holds the database-wide writer lock for fewer statements;
 elsewhere a no-op write (`u = u`) takes the row lock, which MySQL does without
 logging an extra binlog row image. Resets and admin user saves begin their
-transactions with the same no-op write. The detail row is incremented in one
-statement and created only on a user's first report from a node in the cycle.
+transactions with the same no-op write. A single upsert writes cycle and daily
+detail to the same user/node row. SQLite prepares it once per report batch,
+before taking the writer lock, and reuses it for the users in that batch.
+Writes still go through Laravel's query hooks and exception handling. If
+SQLite reconnects between transactions, the next write prepares a statement
+on the new PDO connection.
 The billed delta is read back from the updated counters to preserve
 the database's existing fractional-rate rounding. This adds database work per
 reported user. Resets take the same lock and clear detail in the transaction;
@@ -121,10 +125,10 @@ the admin customization script (the existing update/build scripts do this).
 Old workers do not record node detail, so their traffic remains unattributed.
 
 The used-traffic cell also shows how many nodes the user has used, from
-`used_node_count` in the `user/fetch` response. It counts the user's rows in
-`v2_user_server_traffic`, the same nodes the dialog lists, including deleted
-nodes. Traffic from before attribution was enabled is not counted. The count
-is a separate query, outside the `admin.user.fetch.query` plugin hook, so
+`used_node_count` in the `user/fetch` response. It counts the user's
+current-cycle rows in `v2_user_server_traffic`, the same nodes the dialog lists,
+including deleted nodes. Traffic from before attribution was enabled is not
+counted. The count is read outside the `admin.user.fetch.query` plugin hook, so
 usage fields a plugin defines are returned as it selected them. The page and
 the count are read in one transaction at REPEATABLE READ (set for that
 transaction on MySQL, MariaDB and PostgreSQL, whose default may be READ
@@ -134,6 +138,40 @@ selected, with a count from another cycle. This holds because the `user/fetch`
 route opens no transaction of its own: inside a caller's transaction the level
 can no longer be set and the reads use that transaction's level, so under READ
 COMMITTED they can again disagree.
+
+## Today's user traffic
+
+The user list shows Today's Traffic to the right of Used Traffic.
+`user/fetch` returns `today_traffic` (billed bytes) and `today_node_count`
+from the same day's node rows, in the list's existing snapshot. Clicking
+the cell opens the same dialog with `user/getNodeTraffic?id=...&period=today`.
+The totals include the node rate applied at accounting time. The table
+shows actual upload and download bytes and includes deleted nodes.
+The list and dialog use the same SQL aggregate. On SQLite, it adds fractional
+billed bytes in node ID order. The dialog reads that total and its node rows
+in one statement.
+
+`v2_user_server_traffic` keeps separate cycle and daily counters in a
+single row per user and node. The report's dispatch timestamp sets its
+UTC+8 calendar day. A later day replaces the daily counters and a
+delayed report for an earlier day only updates the cycle counters when
+the row already has newer daily data. Cycle resets and manual counter
+edits clear cycle attribution and leave that day's traffic available.
+`reset:log` removes rows that have neither current-cycle usage nor
+today's traffic. Deleting a user removes both sets of counters.
+
+Daily node attribution starts with reports processed by updated queue
+workers. Existing daily user statistics have no node IDs, so they
+cannot backfill this view. When upgrading from the separate daily
+table, the consolidation migration copies today's data and preserves
+cycle totals. After an interruption, the copy can resume after schema changes
+or partly copied rows. For rollback, check which migrations are still
+recorded, then use `--batch` or `--path` to target the intended migration.
+Reusing a step count can reach an earlier migration if the rollback already
+removed some entries. Stop processes that record or reset traffic before
+upgrading or rolling back, then restart them with code that matches the
+resulting schema. Generate the customized admin bundle using the usual build
+step.
 
 ## Today's node traffic
 

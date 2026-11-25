@@ -15,6 +15,10 @@ $app = new Illuminate\Foundation\Application(
     $_ENV['APP_BASE_PATH'] ?? dirname(__DIR__)
 );
 
+Illuminate\Database\Connection::resolverFor('sqlite', fn ($pdo, $database, $prefix, $config) =>
+    new App\Database\SQLiteConnection($pdo, $database, $prefix, $config)
+);
+
 /*
 |--------------------------------------------------------------------------
 | Bind Important Interfaces

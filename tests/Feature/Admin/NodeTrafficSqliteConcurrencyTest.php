@@ -11,6 +11,7 @@ use App\Services\TrafficResetService;
 use App\Utils\Helper;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Events\TransactionBeginning;
+use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Bus;
@@ -119,7 +120,8 @@ class NodeTrafficSqliteConcurrencyTest extends TestCase
         $this->assertTrue(app(TrafficResetService::class)->manualReset(User::findOrFail($user->id)));
         $this->assertTrue($this->otherWriterBlocked);
         $this->assertEquals(0, $user->fresh()->u + $user->fresh()->d);
-        $this->assertSame(0, UserServerTraffic::count());
+        $this->assertSame(0, UserServerTraffic::inCycle()->count());
+        $this->assertEquals(300, UserServerTraffic::sum(DB::raw('daily_billed_u + daily_billed_d')));
     }
 
     public function test_node_report_holds_the_writer_lock_during_other_reports(): void
@@ -131,6 +133,34 @@ class NodeTrafficSqliteConcurrencyTest extends TestCase
         $this->assertTrue($this->otherWriterBlocked);
         $this->assertEquals(300, $user->fresh()->u + $user->fresh()->d);
         $this->assertEquals(300, UserServerTraffic::sum(DB::raw('billed_u + billed_d')));
+    }
+
+    public function test_prepared_detail_write_uses_the_new_pdo_after_a_reconnect_between_transactions(): void
+    {
+        $first = $this->user();
+        $second = $this->user();
+        $node = $this->node();
+        $connection = DB::connection();
+        $connection->disconnect();
+        $firstPdo = null;
+        Event::listen(TransactionCommitted::class, function (TransactionCommitted $event) use ($connection, &$firstPdo) {
+            if ($firstPdo === null && $event->connection === $connection) {
+                $firstPdo = $connection->getPdo();
+                $connection->disconnect();
+            }
+        });
+
+        (new TrafficFetchJob($node->toArray(), [
+            $first->id => [100, 200], $second->id => [10, 20],
+        ], $node->type, time()))->handle();
+
+        $this->assertNotNull($firstPdo);
+        $this->assertNotSame($firstPdo, $connection->getPdo());
+        $this->assertEquals(300, $first->fresh()->u + $first->fresh()->d);
+        $this->assertEquals(30, $second->fresh()->u + $second->fresh()->d);
+        $detail = UserServerTraffic::where('user_id', $second->id)->sole();
+        $this->assertEquals(30, $detail->billed_u + $detail->billed_d);
+        $this->assertEquals(30, $detail->daily_billed_u + $detail->daily_billed_d);
     }
 
     public function test_admin_save_holds_the_writer_lock_during_node_reports(): void

@@ -63,7 +63,7 @@ class TrafficResetService
           'next_reset_at' => $nextResetTime ? $nextResetTime->timestamp : null,
         ]);
 
-        UserServerTraffic::where('user_id', $user->id)->delete();
+        UserServerTraffic::clearCycle($user->id);
 
         $this->recordResetLog($user, [
           'reset_type' => $this->getResetTypeFromPlan($user->plan),

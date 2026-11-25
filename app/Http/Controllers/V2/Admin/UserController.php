@@ -23,6 +23,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
@@ -221,31 +222,55 @@ class UserController extends Controller
 
         $this->applyFiltersAndSorts($request, $userModel);
 
-        // Count, in a separate query, the nodes with recorded traffic in the
-        // current cycle: the rows the node traffic dialog lists, deleted nodes
-        // included. Keeping it out of the plugin-adjustable user query means
-        // a plugin that rebuilds the select, aliases the table or defines its
-        // own usage fields is unaffected. Both reads run in one snapshot, so a
-        // concurrent reset or report cannot pair the page's usage (which the
-        // filters and sort selected) with a count from another cycle.
-        [$users, $usedNodeCounts] = Helper::readSnapshot(function () use ($userModel, $pageSize, $current) {
+        // Read node counts and today's billed bytes, including deleted nodes,
+        // outside the plugin-adjustable query but in the same snapshot.
+        $recordAt = Date::today()->timestamp;
+        [$users, $traffic] = Helper::readSnapshot(function () use ($userModel, $pageSize, $current, $recordAt) {
             $users = $userModel->orderBy('id', 'desc')
                 ->paginate($pageSize, ['*'], 'page', $current);
-            // Inline integer IDs: pageSize has no upper bound, and bound
-            // parameters do.
-            $usedNodeCounts = UserServerTraffic::whereIntegerInRaw('user_id', $users->getCollection()->pluck('id')->all())
-                ->groupBy('user_id')
-                ->selectRaw('user_id, COUNT(*) as total')
-                ->pluck('total', 'user_id');
-            return [$users, $usedNodeCounts];
+            $userIds = $users->getCollection()->pluck('id')->all();
+            $traffic = $this->nodeTrafficSummary($userIds, $recordAt)->get()->keyBy('user_id');
+            return [$users, $traffic];
         });
 
-        $users->getCollection()->transform(function ($user) use ($usedNodeCounts): array {
-            $user->setAttribute('used_node_count', (int) ($usedNodeCounts[$user->id] ?? 0));
+        $users->getCollection()->transform(function ($user) use ($traffic): array {
+            $usage = $traffic->get($user->id);
+            $user->setAttribute('used_node_count', (int) ($usage?->used_node_count ?? 0));
+            $user->setAttribute('today_traffic', ($usage?->today_traffic ?? 0) + 0);
+            $user->setAttribute('today_node_count', (int) ($usage?->today_node_count ?? 0));
             return self::transformUserData($user);
         });
 
         return $this->paginate($users);
+    }
+
+    private function nodeTrafficSummary(array $userIds, int $recordAt): QueryBuilder
+    {
+        // Inline integer IDs because pageSize can exceed the parameter limit.
+        $table = (new UserServerTraffic())->getTable();
+        $summary = DB::table($table . ' as traffic')->whereIntegerInRaw('traffic.user_id', $userIds)
+            ->groupBy('traffic.user_id')
+            ->selectRaw('traffic.user_id, SUM(CASE WHEN in_cycle THEN 1 ELSE 0 END) as used_node_count')
+            ->selectRaw('SUM(CASE WHEN daily_record_at = ? THEN 1 ELSE 0 END) as today_node_count', [$recordAt]);
+
+        if ($summary->getConnection()->getDriverName() !== 'sqlite') {
+            return $summary->selectRaw(
+                'SUM(CASE WHEN daily_record_at = ? THEN daily_billed_u + daily_billed_d ELSE 0 END) as today_traffic',
+                [$recordAt],
+            );
+        }
+
+        // SQLite can keep fractional billed bytes. Feed each user's SUM in
+        // node ID order, independently of how the outer GROUP BY sorts rows.
+        $orderedBytes = DB::table($table . ' as daily')
+            ->whereColumn('daily.user_id', 'traffic.user_id')
+            ->where('daily.daily_record_at', $recordAt)
+            ->orderBy('daily.server_id')
+            ->selectRaw('daily.daily_billed_u + daily.daily_billed_d as billed');
+        return $summary->selectSub(
+            DB::query()->fromSub($orderedBytes, 'ordered_bytes')->selectRaw('COALESCE(SUM(billed), 0)'),
+            'today_traffic',
+        );
     }
 
     // Transform user fields for API response.
@@ -285,30 +310,57 @@ class UserController extends Controller
 
     public function getNodeTraffic(Request $request)
     {
-        $params = $request->validate(['id' => 'required|integer|min:1']);
+        $params = $request->validate([
+            'id' => 'required|integer|min:1',
+            'period' => 'sometimes|in:cycle,today',
+        ]);
+        $recordAt = ($params['period'] ?? 'cycle') === 'today' ? Date::today()->timestamp : null;
 
-        return DB::transaction(function () use ($params) {
+        return DB::transaction(function () use ($params, $recordAt) {
             // Keep the totals and breakdown in one snapshot, including resets.
             $user = User::whereKey($params['id'])->sharedLock()->first();
             if (!$user) {
                 return $this->fail([400202, '用户不存在']);
             }
 
-            $records = UserServerTraffic::query()
-                ->leftJoin('v2_server as server', 'server.id', '=', 'v2_user_server_traffic.server_id')
-                ->where('user_id', $user->id)
-                ->select('v2_user_server_traffic.*', 'server.name as current_name', 'server.id as current_id')
-                ->orderByRaw('billed_u + billed_d DESC')->orderBy('server_id')->get();
+            $query = $recordAt === null
+                ? UserServerTraffic::inCycle()
+                : UserServerTraffic::where('daily_record_at', $recordAt);
+            $table = $query->getModel()->getTable();
+            $prefix = $recordAt === null ? '' : 'daily_';
+            $query
+                ->leftJoin('v2_server as server', 'server.id', '=', $table . '.server_id')
+                ->where($table . '.user_id', $user->id)
+                ->select(
+                    $table . '.server_id', 'server.name as current_name', 'server.id as current_id',
+                    "{$table}.{$prefix}u as upload", "{$table}.{$prefix}d as download",
+                )
+                ->selectRaw("COALESCE({$table}.{$prefix}server_name, {$table}.server_name) as reported_name")
+                ->selectRaw("COALESCE({$table}.{$prefix}created_at, {$table}.created_at) as recorded_at")
+                ->selectRaw("{$table}.{$prefix}billed_u + {$table}.{$prefix}billed_d as billed");
+            if ($recordAt !== null) {
+                // Join the same summary used by the list in this statement so
+                // the total and the displayed rows see the same snapshot.
+                $query->joinSub($this->nodeTrafficSummary([$user->id], $recordAt), 'summary',
+                    'summary.user_id', '=', $table . '.user_id')
+                    ->addSelect('summary.today_traffic');
+            }
+            $records = $query->orderByDesc('billed')->orderBy('server_id')->get();
             $list = $records->map(fn ($record) => [
                 'server_id' => (int) $record->server_id,
-                'server_name' => $record->current_name ?? $record->server_name,
+                'server_name' => $record->current_name ?? $record->reported_name,
                 'deleted' => $record->current_id === null,
-                'upload' => $record->u + 0,
-                'download' => $record->d + 0,
-                'billed' => $record->billed_u + $record->billed_d,
+                'upload' => $record->upload + 0,
+                'download' => $record->download + 0,
+                'billed' => $record->billed + 0,
             ]);
-            $used = $user->u + $user->d;
-            $attributed = $list->sum('billed');
+            $attributed = $recordAt === null
+                ? $list->sum('billed')
+                : ($records->first()?->today_traffic ?? 0) + 0;
+            $recordedFrom = $records->min('recorded_at');
+            // Today's usage consists of the recorded nodes, independent of
+            // the current cycle counters or any resets or manual adjustments.
+            $used = $recordAt === null ? $user->u + $user->d : $attributed;
 
             return $this->success([
                 'list' => $list,
@@ -317,8 +369,8 @@ class UserController extends Controller
                     'attributed_total' => $attributed,
                     'unattributed_total' => max(0, $used - $attributed),
                     'inconsistent' => $attributed > $used,
-                    'recorded_from' => $records->min('created_at')?->timestamp,
-                    'last_reset_at' => $user->last_reset_at,
+                    'recorded_from' => $recordedFrom === null ? null : (int) $recordedFrom,
+                    'last_reset_at' => $recordAt === null ? $user->last_reset_at : null,
                 ],
             ]);
         });
@@ -440,7 +492,7 @@ class UserController extends Controller
                 $user->syncOriginalAttributes(['u', 'd']);
                 $user->update($params);
                 if ($trafficChanged) {
-                    UserServerTraffic::where('user_id', $user->id)->delete();
+                    UserServerTraffic::clearCycle($user->id);
                 }
             }, 5);
         } catch (ValidationException $e) {

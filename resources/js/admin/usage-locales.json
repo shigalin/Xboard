@@ -46,7 +46,15 @@
       "upload": "实际上传",
       "download": "实际下载",
       "deleted": "已删除",
-      "usedNodes": "（{{count}} 个节点）"
+      "usedNodes": "（{{count}} 个节点）",
+      "today": {
+        "column": "今日流量",
+        "title": "今日节点流量明细",
+        "view": "查看 {{email}} 的今日节点流量",
+        "description": "统计 UTC+8 当天已记录的上报。上传和下载为实际流量，汇总包含节点倍率。",
+        "used": "今日已记录用量：{{value}}",
+        "empty": "今日暂无节点流量记录"
+      }
     },
     "copyExpiry": "复制到期时间：{{value}}",
     "onlineUsers": {
@@ -158,7 +166,15 @@
       "upload": "Raw upload",
       "download": "Raw download",
       "deleted": "Deleted",
-      "usedNodes": "(nodes: {{count}})"
+      "usedNodes": "(nodes: {{count}})",
+      "today": {
+        "column": "Today's Traffic",
+        "title": "Today's traffic by node",
+        "view": "View today's node traffic for {{email}}",
+        "description": "Recorded reports for today in UTC+8. Upload and download show raw traffic. The total includes node rates.",
+        "used": "Today's recorded usage: {{value}}",
+        "empty": "No node traffic has been recorded today."
+      }
     },
     "copyExpiry": "Copy expiry time: {{value}}",
     "onlineUsers": {
@@ -270,7 +286,15 @@
       "upload": "Отправлено",
       "download": "Получено",
       "deleted": "Удалён",
-      "usedNodes": "(узлы: {{count}})"
+      "usedNodes": "(узлы: {{count}})",
+      "today": {
+        "column": "Трафик за сегодня",
+        "title": "Трафик по узлам за сегодня",
+        "view": "Трафик по узлам за сегодня для {{email}}",
+        "description": "Учтённые отчёты за текущий день по UTC+8. Отправленный и полученный трафик указан без коэффициентов. Итог включает коэффициенты узлов.",
+        "used": "Учтено за сегодня: {{value}}",
+        "empty": "За сегодня пока нет данных о трафике по узлам."
+      }
     },
     "copyExpiry": "Копировать срок действия: {{value}}",
     "onlineUsers": {
