@@ -11,6 +11,7 @@ use App\Utils\Helper;
 use Illuminate\Cache\Events\RetrievingKey;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
@@ -206,6 +207,67 @@ class DeviceBanTest extends TestCase
             ->assertOk()->assertJsonPath('device_bans', []);
         $this->getJson('/api/v2/server/devices?' . http_build_query($this->auth($b)))
             ->assertOk()->assertJsonPath("users.{$user->id}", ['198.51.100.2']);
+    }
+
+    public function test_a_ban_from_the_combined_count_is_logged_once_with_the_counted_ips(): void
+    {
+        $logged = $this->captureBanLogs();
+        $user = $this->makeUser();
+        $a = $this->makeServer(1);
+        $b = $this->makeServer(1);
+        $report = fn (Server $node, string $ip, int $sequence) => $this->postJson('/api/v2/server/report', $this->auth($node) + [
+            'alive' => [$user->id => [$ip]],
+            'device_sequence' => $sequence,
+            'device_full_snapshot' => true,
+        ])->assertOk();
+
+        // Each node sees one IP; only the panel's merged count exceeds the limit.
+        $report($a, '192.0.2.1', 1);
+        $this->assertSame([], $logged->getArrayCopy());
+        $report($b, '198.51.100.2', 1);
+        // A further over-limit report during the active ban starts nothing.
+        $report($b, '203.0.113.3', 2);
+
+        $deadline = $this->getJson('/api/v2/server/device-bans?' . http_build_query($this->auth($a)))
+            ->assertOk()->json("device_bans.{$user->id}");
+        $this->assertIsInt($deadline);
+        $this->assertCount(1, $logged);
+        $context = $logged[0];
+        $this->assertEqualsCanonicalizing(['192.0.2.1', '198.51.100.2'], $context['ips']);
+        unset($context['ips']);
+        $this->assertSame([
+            'user_id' => $user->id,
+            'source' => 'panel',
+            'node_id' => $b->id,
+            'until' => date('Y-m-d H:i:s', intdiv($deadline, 1000)),
+            'until_ms' => $deadline,
+            'device_limit' => 1,
+            'device_count' => 2,
+        ], $context);
+    }
+
+    public function test_a_ban_reported_by_a_node_is_logged_once(): void
+    {
+        $logged = $this->captureBanLogs();
+        $user = $this->makeUser();
+        $a = $this->makeServer(1);
+        $b = $this->makeServer(1);
+        $deadline = (int) floor(microtime(true) * 1000) + 179000;
+
+        $this->postJson('/api/v2/server/device-bans', $this->auth($a) + [
+            'device_bans' => [$user->id => $deadline],
+        ])->assertOk()->assertJsonPath("device_bans.{$user->id}", $deadline);
+        $this->postJson('/api/v2/server/device-bans', $this->auth($b) + [
+            'device_bans' => [$user->id => $deadline + 10000],
+        ])->assertOk()->assertJsonPath("device_bans.{$user->id}", $deadline);
+
+        $this->assertSame([[
+            'user_id' => $user->id,
+            'source' => 'node',
+            'node_id' => $a->id,
+            'until' => date('Y-m-d H:i:s', intdiv($deadline, 1000)),
+            'until_ms' => $deadline,
+        ]], $logged->getArrayCopy());
     }
 
     public function test_failed_device_check_retries_on_the_next_unchanged_report(): void
@@ -433,6 +495,19 @@ class DeviceBanTest extends TestCase
             'device_bans' => [$user->id => $deadline],
         ])->assertOk()->assertJsonPath("device_bans.{$user->id}", $deadline);
         $this->assertSame([$nodes['list']->id], array_column($pushes, 'node_id'));
+    }
+
+    /** Contexts of "ban started" log entries, in order. */
+    private function captureBanLogs(): \ArrayObject
+    {
+        $logged = new \ArrayObject();
+        Event::listen(MessageLogged::class, function (MessageLogged $event) use ($logged): void {
+            if ($event->message === '[DeviceBan] Device ban started') {
+                $this->assertSame('warning', $event->level);
+                $logged[] = $event->context;
+            }
+        });
+        return $logged;
     }
 
     private function auth(Server $node): array

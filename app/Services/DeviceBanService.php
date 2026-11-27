@@ -85,7 +85,7 @@ class DeviceBanService
         $reports = array_filter(array_map('intval', $reports), static fn (int $until) => $until > 0);
         $eligible = ServerService::getAvailableUsers($node, array_keys($reports))
             ->where('device_limit', '>', 0)->keyBy('id')->all();
-        $this->publishNewBans(array_intersect_key($reports, $eligible));
+        $this->publishNewBans(array_intersect_key($reports, $eligible), 'node', (int) $node->id);
     }
 
     public function checkReportedDevices(Server|int $node, array $alive, array $affectedUserIds): void
@@ -109,12 +109,20 @@ class DeviceBanService
                 ->where('device_limit', '>', 0)->pluck('device_limit', 'id')->all();
 
             $overLimit = [];
+            $details = [];
             foreach ($this->getAdmissionIPs(array_keys($limits)) as $id => $ips) {
-                if (DeviceStateService::countDevices($ips) > $limits[$id]) {
+                $count = DeviceStateService::countDevices($ips);
+                if ($count > $limits[$id]) {
                     $overLimit[$id] = 0;
+                    // The IPs counted: fresh reports from every node, merged.
+                    $details[$id] = [
+                        'device_limit' => (int) $limits[$id],
+                        'device_count' => $count,
+                        'ips' => $ips,
+                    ];
                 }
             }
-            $this->publishNewBans($overLimit);
+            $this->publishNewBans($overLimit, 'panel', (int) $nodeId, $details);
         } catch (\Throwable $error) {
             // The IPs were saved. Let the next report retry even if the set is unchanged.
             try {
@@ -166,7 +174,20 @@ class DeviceBanService
         return $matched;
     }
 
-    private function publishNewBans(array $reports): void
+    /**
+     * Start bans that are not already active and push them to the user's nodes.
+     *
+     * Each started ban is logged once, so a ban is visible even though nodes
+     * that apply it log nothing. $source is "node" when a node reported that
+     * it refused a connection over its local count, and "panel" when the
+     * combined count across nodes exceeded the limit on a device report
+     * ($nodeId is the reporting node either way). Deadlines are Unix
+     * milliseconds on the panel clock.
+     *
+     * @param array<int, int> $reports user ID => proposed deadline, 0 for the default
+     * @param array<int, array<string, mixed>> $details extra log context per user
+     */
+    private function publishNewBans(array $reports, string $source, int $nodeId, array $details = []): void
     {
         $newBans = [];
         foreach ($reports as $id => $until) {
@@ -175,6 +196,13 @@ class DeviceBanService
             $deadline = (int) Redis::eval(self::START_BAN, 1, self::KEY, $id, $until, $now);
             if ($deadline > 0) {
                 $newBans[$id] = $deadline;
+                Log::warning('[DeviceBan] Device ban started', [
+                    'user_id' => (int) $id,
+                    'source' => $source,
+                    'node_id' => $nodeId,
+                    'until' => date('Y-m-d H:i:s', intdiv($deadline, 1000)),
+                    'until_ms' => $deadline,
+                ] + ($details[$id] ?? []));
             }
         }
         if ($newBans === []) {

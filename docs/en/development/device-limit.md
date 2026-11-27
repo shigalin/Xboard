@@ -171,6 +171,24 @@ return [
    - Fraud detection
    - Improved encryption
 
+## Device ban log
+
+The panel writes one `warning` entry, `[DeviceBan] Device ban started`, each
+time it starts a three-minute device ban. A ban that is already active is not
+logged again. Nodes that apply a pushed ban log nothing, so this entry is the
+only record of bans the panel starts on its own.
+
+| Field | Meaning |
+| --- | --- |
+| `user_id` | Banned user |
+| `source` | `panel`: the IPs every node reported for the user, merged, exceed `device_limit`; no single node needs to exceed it. `node`: a node reported that it refused a connection over its own count (that node also logs `device limit exceeded`) |
+| `node_id` | Node whose report started the ban |
+| `until`, `until_ms` | End of the ban, as application-timezone time and Unix milliseconds |
+| `device_limit`, `device_count`, `ips` | `panel` only: the limit, the counted devices (the larger of distinct IPv4 and distinct IPv6 addresses) and the IPs counted: those reported within the last 300 seconds and not before an earlier ban ended |
+
+A client that reaches nodes through several exits (for example a `dialer-proxy`
+group) shows up as `source: panel` with one IP per exit.
+
 ## Conclusion
 
 This design provides a robust and efficient solution for managing online device limits while maintaining good performance and user experience. Regular monitoring and updates will ensure the system remains effective and secure. 
