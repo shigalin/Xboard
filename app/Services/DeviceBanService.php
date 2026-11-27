@@ -4,8 +4,8 @@ namespace App\Services;
 
 use App\Models\Server;
 use App\Models\User;
+use App\Support\BestEffortLog;
 use App\Utils\Helper;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 
 class DeviceBanService
@@ -59,7 +59,7 @@ class DeviceBanService
         try {
             $deadlines = $this->getBanDeadlines();
         } catch (\Throwable $error) {
-            Log::warning('Could not load device bans for device snapshot', ['error' => $error::class]);
+            BestEffortLog::write('warning', 'Could not load device bans for device snapshot', ['error' => $error::class]);
             $deadlines = [];
         }
         $now = (int) floor(microtime(true) * 1000);
@@ -128,12 +128,12 @@ class DeviceBanService
             try {
                 app(DeviceStateService::class)->retryDeviceCheck($userIds);
             } catch (\Throwable $retryError) {
-                Log::warning('Could not reschedule device limit check', [
+                BestEffortLog::write('warning', 'Could not reschedule device limit check', [
                     'node_id' => $nodeId,
                     'error' => $retryError::class,
                 ]);
             }
-            Log::warning('Device limit check failed after saving the report', [
+            BestEffortLog::write('warning', 'Device limit check failed after saving the report', [
                 'node_id' => $nodeId,
                 'error' => $error::class,
             ]);
@@ -177,12 +177,10 @@ class DeviceBanService
     /**
      * Start bans that are not already active and push them to the user's nodes.
      *
-     * Each started ban is logged once, so a ban is visible even though nodes
-     * that apply it log nothing. $source is "node" when a node reported that
-     * it refused a connection over its local count, and "panel" when the
-     * combined count across nodes exceeded the limit on a device report
-     * ($nodeId is the reporting node either way). Deadlines are Unix
-     * milliseconds on the panel clock.
+     * Attempt one log entry per started ban. $source is "node" for a node's
+     * rejection report and "panel" when the panel detects a combined count
+     * above the limit. $nodeId identifies the reporting node in either case.
+     * Deadlines are Unix milliseconds on the panel clock.
      *
      * @param array<int, int> $reports user ID => proposed deadline, 0 for the default
      * @param array<int, array<string, mixed>> $details extra log context per user
@@ -196,7 +194,7 @@ class DeviceBanService
             $deadline = (int) Redis::eval(self::START_BAN, 1, self::KEY, $id, $until, $now);
             if ($deadline > 0) {
                 $newBans[$id] = $deadline;
-                Log::warning('[DeviceBan] Device ban started', [
+                BestEffortLog::write('warning', '[DeviceBan] Device ban started', [
                     'user_id' => (int) $id,
                     'source' => $source,
                     'node_id' => $nodeId,
@@ -231,7 +229,7 @@ class DeviceBanService
             }
             return [$nodeValues, self::bannedUsersByGroupValue($bannedIds, $values)];
         });
-        foreach ($nodeValues as $nodeId => $keys) {
+        foreach ($nodeValues as $targetNodeId => $keys) {
             $bans = [];
             foreach (array_keys($keys) as $key) {
                 if ($matched[$key] === null) {
@@ -240,8 +238,8 @@ class DeviceBanService
                 }
                 $bans += array_intersect_key($newBans, array_flip($matched[$key]));
             }
-            if ($bans !== [] && NodeSyncService::isNodeOnline($nodeId)) {
-                NodeSyncService::push($nodeId, 'sync.devices', ['device_bans' => (object) $bans]);
+            if ($bans !== [] && NodeSyncService::isNodeOnline($targetNodeId)) {
+                NodeSyncService::push($targetNodeId, 'sync.devices', ['device_bans' => (object) $bans]);
             }
         }
     }

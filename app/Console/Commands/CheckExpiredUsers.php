@@ -4,9 +4,9 @@ namespace App\Console\Commands;
 
 use App\Models\User;
 use App\Services\NodeSyncService;
+use App\Support\BestEffortLog;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Cache\LockTimeoutException;
-use Illuminate\Support\Facades\Log;
 
 class CheckExpiredUsers extends Command
 {
@@ -47,8 +47,8 @@ class CheckExpiredUsers extends Command
                 if (NodeSyncService::notifyUserChanged($user)) {
                     $synced++;
                 }
-            } catch (LockTimeoutException $e) {
-                Log::warning("[CheckExpiredUsers] Lock timeout for user #{$userId}");
+            } catch (LockTimeoutException) {
+                BestEffortLog::write('warning', "[CheckExpiredUsers] Lock timeout for user #{$userId}");
             }
         }
 

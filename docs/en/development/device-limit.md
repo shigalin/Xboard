@@ -173,21 +173,26 @@ return [
 
 ## Device ban log
 
-The panel writes one `warning` entry, `[DeviceBan] Device ban started`, each
-time it starts a three-minute device ban. A ban that is already active is not
-logged again. Nodes that apply a pushed ban log nothing, so this entry is the
-only record of bans the panel starts on its own.
+The panel attempts to write one `warning` entry, `[DeviceBan] Device ban started`,
+for each new ban. An active ban produces no additional start entry. The panel
+continues processing bans and sending them to connected nodes if its Laravel log
+channel fails, including when WebSocket debug logging is enabled.
+
+A ban from the panel's combined count lasts three minutes. For a node-reported
+ban, the panel uses the earlier of the reported deadline and three minutes from
+its own current time.
 
 | Field | Meaning |
 | --- | --- |
 | `user_id` | Banned user |
-| `source` | `panel`: the IPs every node reported for the user, merged, exceed `device_limit`; no single node needs to exceed it. `node`: a node reported that it refused a connection over its own count (that node also logs `device limit exceeded`) |
+| `source` | `panel`: the panel detected a combined count above `device_limit` while processing an online-device report. `node`: a node reported that it rejected an incoming connection after its device check exceeded the limit. |
 | `node_id` | Node whose report started the ban |
 | `until`, `until_ms` | End of the ban, as application-timezone time and Unix milliseconds |
 | `device_limit`, `device_count`, `ips` | `panel` only: the limit, the counted devices (the larger of distinct IPv4 and distinct IPv6 addresses) and the IPs counted: those reported within the last 300 seconds and not before an earlier ban ended |
 
-A client that reaches nodes through several exits (for example a `dialer-proxy`
-group) shows up as `source: panel` with one IP per exit.
+A node's device check can combine its local connection IPs, a recent panel
+snapshot and the incoming IP. Several exit IPs, such as those from a `dialer-proxy`
+group, can therefore trigger either source if the count exceeds the limit.
 
 ## Conclusion
 

@@ -7,8 +7,8 @@ use App\Services\DeviceBanService;
 use App\Services\DeviceStateService;
 use App\Services\NodeRegistry;
 use App\Services\ServerService;
+use App\Support\BestEffortLog;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 use Workerman\Connection\TcpConnection;
 
@@ -34,7 +34,7 @@ class NodeEventHandlers
         Cache::put(\App\Utils\CacheKey::get('SERVER_' . $nodeType . '_LAST_CHECK_AT', $nodeId), time(), 3600);
         ServerService::updateMetrics($node, $data);
 
-        Log::debug("[WS] Node#{$nodeId} status updated");
+        BestEffortLog::write('debug', "[WS] Node#{$nodeId} status updated");
     }
 
     /**
@@ -54,7 +54,7 @@ class NodeEventHandlers
 
         $affectedUserIds = $service->syncNodeDevices($nodeId, $data, $sequence, true);
         if ($affectedUserIds === null) {
-            Log::debug("[WS] Node#{$nodeId} ignored stale device report", ['sequence' => $sequence]);
+            BestEffortLog::write('debug', "[WS] Node#{$nodeId} ignored stale device report", ['sequence' => $sequence]);
             return;
         }
 
@@ -68,7 +68,7 @@ class NodeEventHandlers
         if ($affectedUserIds !== []) {
             app(DeviceBanService::class)->checkReportedDevices($nodeId, $data, $affectedUserIds);
         }
-        Log::debug("[WS] Node#{$nodeId} applied device report", [
+        BestEffortLog::write('debug', "[WS] Node#{$nodeId} applied device report", [
             'sequence' => $sequence,
             'reported_users' => count($data),
             'affected_users' => count($affectedUserIds),
@@ -89,7 +89,7 @@ class NodeEventHandlers
         $snapshot = app(DeviceBanService::class)->getDeviceSnapshot($userIds);
         NodeRegistry::send($nodeId, 'sync.devices', $snapshot);
 
-        Log::debug("[WS] Node#{$nodeId} requested devices, sent " . count($snapshot['users']) . " users");
+        BestEffortLog::write('debug', "[WS] Node#{$nodeId} requested devices, sent " . count($snapshot['users']) . " users");
     }
 
     /**
@@ -105,7 +105,7 @@ class NodeEventHandlers
         $snapshot = app(DeviceBanService::class)->getDeviceSnapshot($userIds);
         NodeRegistry::send($nodeId, 'sync.devices', $snapshot);
 
-        Log::debug("[WS] Pushed device state to node#{$nodeId}: " . count($snapshot['users']) . " users");
+        BestEffortLog::write('debug', "[WS] Pushed device state to node#{$nodeId}: " . count($snapshot['users']) . " users");
     }
 
     /**
@@ -127,7 +127,7 @@ class NodeEventHandlers
             'users' => $users,
         ]);
 
-        Log::info("[WS] Full sync pushed to node#{$nodeId}", [
+        BestEffortLog::write('info', "[WS] Full sync pushed to node#{$nodeId}", [
             'users' => count($users),
         ]);
     }

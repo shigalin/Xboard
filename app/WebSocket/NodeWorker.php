@@ -7,8 +7,8 @@ use App\Models\ServerMachine;
 use App\Services\DeviceStateService;
 use App\Services\NodeRegistry;
 use App\Services\ServerService;
+use App\Support\BestEffortLog;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 use Workerman\Connection\TcpConnection;
 use Workerman\Timer;
@@ -67,7 +67,7 @@ class NodeWorker
 
     public function onWorkerStart(Worker $worker): void
     {
-        Log::info("[WS] Worker started, pid={$worker->id}");
+        BestEffortLog::write('info', "[WS] Worker started, pid={$worker->id}");
         app(DeviceStateService::class)->completeIndexMigration();
         $this->subscribeRedis();
         $this->setupTimers();
@@ -120,7 +120,7 @@ class NodeWorker
             try {
                 $service->flushPendingUpdates(100);
             } catch (\Throwable $e) {
-                Log::error('[WS] Failed to flush device DB updates', [
+                BestEffortLog::write('error', '[WS] Failed to flush device DB updates', [
                     'error' => $e->getMessage(),
                 ]);
             }
@@ -197,7 +197,7 @@ class NodeWorker
         $deviceService->clearAllNodeDevices($nodeId, $connectionSequence);
         $conn->deviceSequences = [$nodeId => $connectionSequence];
 
-        Log::debug("[WS] Node#{$nodeId} connected", [
+        BestEffortLog::write('debug', "[WS] Node#{$nodeId} connected", [
             'remote' => $conn->getRemoteIp(),
             'total' => NodeRegistry::count(),
         ]);
@@ -253,7 +253,7 @@ class NodeWorker
         $conn->machineNodeIds = $nodeIds;
         $conn->deviceSequences = $deviceSequences;
 
-        Log::debug("[WS] Machine#{$machineId} connected, nodes: " . implode(',', $nodeIds), [
+        BestEffortLog::write('debug', "[WS] Machine#{$machineId} connected, nodes: " . implode(',', $nodeIds), [
             'remote' => $conn->getRemoteIp(),
             'total' => NodeRegistry::count(),
             'machines' => NodeRegistry::machineCount(),
@@ -329,7 +329,7 @@ class NodeWorker
                 NodeRegistry::removeMachine((int) $conn->machineId, $conn);
             }
 
-            Log::debug("[WS] Machine#{$machineId} disconnected", [
+            BestEffortLog::write('debug', "[WS] Machine#{$machineId} disconnected", [
                 'nodes' => $conn->machineNodeIds,
                 'total' => NodeRegistry::count(),
                 'machines' => NodeRegistry::machineCount(),
@@ -346,7 +346,7 @@ class NodeWorker
             $connectionSequence = (int) (($conn->deviceSequences ?? [])[$nodeId] ?? 0);
             $affectedUserIds = $service->clearAllNodeDevices($nodeId, $connectionSequence);
 
-            Log::debug("[WS] Node#{$nodeId} disconnected", [
+            BestEffortLog::write('debug', "[WS] Node#{$nodeId} disconnected", [
                 'total' => NodeRegistry::count(),
                 'affected_users' => count($affectedUserIds),
             ]);
@@ -394,7 +394,7 @@ class NodeWorker
 
                 $sent = NodeRegistry::sendMachine((int) $machineId, $event, $data);
                 if ($sent) {
-                    Log::debug("[WS] Pushed {$event} to machine#{$machineId}");
+                    BestEffortLog::write('debug', "[WS] Pushed {$event} to machine#{$machineId}");
                 }
                 return;
             }
@@ -407,10 +407,10 @@ class NodeWorker
 
             $sent = NodeRegistry::send((int) $nodeId, $event, $data);
             if ($sent) {
-                Log::debug("[WS] Pushed {$event} to node#{$nodeId}");
+                BestEffortLog::write('debug', "[WS] Pushed {$event} to node#{$nodeId}");
             }
         });
 
-        Log::info("[WS] Subscribed to Redis channel: {$channel}");
+        BestEffortLog::write('info', "[WS] Subscribed to Redis channel: {$channel}");
     }
 }

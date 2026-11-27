@@ -6,8 +6,10 @@ use App\Jobs\TrafficFetchJob;
 use App\Models\Server;
 use App\Models\User;
 use App\Services\DeviceBanService;
+use App\Services\NodeRegistry;
 use App\Services\ServerService;
 use App\Utils\Helper;
+use App\WebSocket\NodeEventHandlers;
 use Illuminate\Cache\Events\RetrievingKey;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -17,8 +19,14 @@ use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
+use Monolog\Handler\NullHandler;
+use Monolog\Level;
+use Monolog\LogRecord;
 use Tests\TestCase;
+use Workerman\Connection\TcpConnection;
+use Workerman\Events\Select;
 
 class DeviceBanTest extends TestCase
 {
@@ -30,6 +38,14 @@ class DeviceBanTest extends TestCase
     {
         parent::setUp();
         config()->set('app.key', 'base64:' . base64_encode(str_repeat('a', 32)));
+        config([
+            'logging.default' => 'device-ban-test',
+            'logging.channels.device-ban-test' => [
+                'driver' => 'monolog',
+                'handler' => NullHandler::class,
+                'level' => 'debug',
+            ],
+        ]);
         admin_setting(['server_token' => 'test-node-token']);
         $this->redisPrefix = 'device_ban_test:' . bin2hex(random_bytes(8)) . ':';
         config(['database.redis.options.prefix' => $this->redisPrefix]);
@@ -270,6 +286,92 @@ class DeviceBanTest extends TestCase
         ]], $logged->getArrayCopy());
     }
 
+    public function test_a_failed_log_channel_does_not_interrupt_the_batch_or_its_pushes(): void
+    {
+        $first = $this->makeUser();
+        $second = $this->makeUser('second-device-ban@example.com');
+        $a = $this->makeServer(1);
+        $b = $this->makeServer(1);
+        foreach ([$a, $b] as $node) {
+            Cache::put("node_ws_alive:{$node->id}", true);
+        }
+
+        $attempts = $this->failLogWrites();
+        $pushes = $this->capturePushes();
+
+        $deadline = (int) floor(microtime(true) * 1000) + 179000;
+        $reports = [$first->id => $deadline, $second->id => $deadline];
+        $this->postJson('/api/v2/server/device-bans', $this->auth($a) + ['device_bans' => $reports])
+            ->assertOk()
+            ->assertJsonPath("device_bans.{$first->id}", $deadline)
+            ->assertJsonPath("device_bans.{$second->id}", $deadline);
+
+        $this->assertEqualsCanonicalizing([$a->id, $b->id], array_column($pushes->getArrayCopy(), 'node_id'));
+        foreach ($pushes as $push) {
+            $this->assertSame('sync.devices', $push['event']);
+            $this->assertEquals($reports, $push['data']['device_bans']);
+        }
+
+        $starts = array_filter($attempts->getArrayCopy(), static fn (LogRecord $record) => $record->message === '[DeviceBan] Device ban started');
+        $this->assertCount(2, $starts);
+        $this->assertEqualsCanonicalizing(array_keys($reports), array_map(static fn (LogRecord $record) => $record->context['user_id'], $starts));
+    }
+
+    public function test_websocket_reports_and_device_state_push_survive_log_channel_failure(): void
+    {
+        $user = $this->makeUser();
+        $a = $this->makeServer(1);
+        $b = $this->makeServer(1);
+        foreach ([$a, $b] as $node) {
+            Cache::put("node_ws_alive:{$node->id}", true);
+        }
+
+        $attempts = $this->failLogWrites();
+        $pushes = $this->capturePushes();
+        [$socket, $peer] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        stream_set_blocking($peer, false);
+        $connection = new TcpConnection(new Select(), $socket);
+        NodeRegistry::add($b->id, $connection);
+        try {
+            NodeEventHandlers::handleDeviceReport($connection, $a->id, [
+                'device_sequence' => 1,
+                'devices' => [$user->id => ['192.0.2.1']],
+            ]);
+            $this->assertCount(0, $pushes);
+            NodeEventHandlers::handleDeviceReport($connection, $b->id, [
+                'device_sequence' => 1,
+                'devices' => [$user->id => ['198.51.100.2']],
+            ]);
+
+            $deadline = $this->getJson('/api/v2/server/device-bans?' . http_build_query($this->auth($a)))
+                ->assertOk()->json("device_bans.{$user->id}");
+            $this->assertIsInt($deadline);
+            $this->assertEqualsCanonicalizing([$a->id, $b->id], array_column($pushes->getArrayCopy(), 'node_id'));
+            foreach ($pushes as $push) {
+                $this->assertSame('sync.devices', $push['event']);
+                $this->assertSame([$user->id => $deadline], $push['data']['device_bans']);
+            }
+
+            NodeEventHandlers::pushDeviceStateToNode($b->id);
+            $message = json_decode(stream_get_contents($peer), true, flags: JSON_THROW_ON_ERROR);
+            $this->assertSame('sync.devices', $message['event']);
+            $this->assertSame([$user->id => $deadline], $message['data']['device_bans']);
+
+            $debug = array_filter($attempts->getArrayCopy(), static fn (LogRecord $record) => $record->level === Level::Debug);
+            $this->assertSame([
+                "[WS] Node#{$a->id} applied device report",
+                "[WS] Node#{$b->id} applied device report",
+                "[WS] Pushed device state to node#{$b->id}: 1 users",
+            ], array_column($debug, 'message'));
+            $starts = array_filter($attempts->getArrayCopy(), static fn (LogRecord $record) => $record->message === '[DeviceBan] Device ban started');
+            $this->assertSame(['panel'], array_column(array_column($starts, 'context'), 'source'));
+        } finally {
+            NodeRegistry::remove($b->id, $connection);
+            $connection->destroy();
+            fclose($peer);
+        }
+    }
+
     public function test_failed_device_check_retries_on_the_next_unchanged_report(): void
     {
         $user = $this->makeUser();
@@ -285,6 +387,7 @@ class DeviceBanTest extends TestCase
         );
         $report($a, '192.0.2.1', 1)->assertOk();
         Bus::fake();
+        $attempts = $this->failLogWrites();
         $fail = true;
         DB::listen(function ($query) use (&$fail): void {
             if ($fail && str_contains($query->sql, 'v2_user')) {
@@ -297,6 +400,7 @@ class DeviceBanTest extends TestCase
             'alive' => [$user->id => ['198.51.100.2']],
             'traffic' => [$user->id => [15, 25]],
         ])->assertOk()->assertJsonPath('data', true);
+        $this->assertContains('Device limit check failed after saving the report', array_column($attempts->getArrayCopy(), 'message'));
         $report($b, '198.51.100.2', 2)->assertOk();
         Bus::assertDispatchedTimes(TrafficFetchJob::class, 1);
         $this->assertIsInt($this->getJson('/api/v2/server/device-bans?' . http_build_query($this->auth($a)))
@@ -497,6 +601,29 @@ class DeviceBanTest extends TestCase
         $this->assertSame([$nodes['list']->id], array_column($pushes, 'node_id'));
     }
 
+    /** @return \ArrayObject<int, LogRecord> */
+    private function failLogWrites(): \ArrayObject
+    {
+        $attempts = new \ArrayObject();
+        Log::getLogger()->pushProcessor(static function (LogRecord $record) use ($attempts): never {
+            $attempts[] = $record;
+            throw new \RuntimeException('Simulated log channel failure');
+        });
+        return $attempts;
+    }
+
+    private function capturePushes(): \ArrayObject
+    {
+        $pushes = new \ArrayObject();
+        Redis::enableEvents();
+        Redis::listen(static function (CommandExecuted $command) use ($pushes): void {
+            if ($command->command === 'publish') {
+                $pushes[] = json_decode($command->parameters[1], true, flags: JSON_THROW_ON_ERROR);
+            }
+        });
+        return $pushes;
+    }
+
     /** Contexts of "ban started" log entries, in order. */
     private function captureBanLogs(): \ArrayObject
     {
@@ -515,10 +642,10 @@ class DeviceBanTest extends TestCase
         return ['token' => 'test-node-token', 'node_id' => $node->id];
     }
 
-    private function makeUser(): User
+    private function makeUser(string $email = 'device-ban@example.com'): User
     {
         return User::withoutEvents(fn () => User::create([
-            'email' => 'device-ban@example.com',
+            'email' => $email,
             'password' => '',
             'uuid' => Helper::guid(true),
             'token' => Helper::guid(),

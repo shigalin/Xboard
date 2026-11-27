@@ -5,8 +5,8 @@ namespace App\Services;
 use App\Models\Server;
 use App\Models\ServerMachine;
 use App\Models\User;
+use App\Support\BestEffortLog;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 
 class NodeSyncService
@@ -186,7 +186,7 @@ class NodeSyncService
                 'data' => $data,
             ]));
             if ($received <= 0) {
-                Log::warning("[NodePush] No subscriber received message, WS server may be down", [
+                BestEffortLog::write('warning', '[NodePush] No subscriber received message, WS server may be down', [
                     'node_id' => $nodeId,
                     'event' => $event,
                 ]);
@@ -194,7 +194,7 @@ class NodeSyncService
             }
             return true;
         } catch (\Throwable $e) {
-            Log::warning("[NodePush] Redis publish failed: {$e->getMessage()}", [
+            BestEffortLog::write('warning', "[NodePush] Redis publish failed: {$e->getMessage()}", [
                 'node_id' => $nodeId,
                 'event' => $event,
             ]);
@@ -214,7 +214,7 @@ class NodeSyncService
                 'data' => $data,
             ]));
         } catch (\Throwable $e) {
-            Log::warning("[NodePush] Redis machine publish failed: {$e->getMessage()}", [
+            BestEffortLog::write('warning', "[NodePush] Redis machine publish failed: {$e->getMessage()}", [
                 'machine_id' => $machineId,
                 'event' => $event,
             ]);
